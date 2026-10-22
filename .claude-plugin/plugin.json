@@ -4,5 +4,6 @@
   "description": "Turn a business decision problem into a working, tested Jev decision engine. Works out whether it is a gate, router, severity score, cascade or loop, shows the alternatives, builds the engine, and keeps it recalibrated as project context changes.",
   "author": { "name": "exponen-agi" },
   "repository": "https://github.com/exponen-agi/autojev",
+  "license": "MIT",
   "keywords": ["jev", "typesafe", "decision-engine", "classification", "triage", "routing"]
 }

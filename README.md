@@ -119,3 +119,7 @@ skills/autojev-stop/   SKILL.md, scripts/stop.py
 agents/                autojev-recalibrator.md
 tests/                 end-to-end tests, including a real watcher process
 ```
+
+## License
+
+[MIT](LICENSE)
