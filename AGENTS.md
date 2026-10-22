@@ -13,6 +13,11 @@ is tied to one agent.
 3. No shell? Run `skills/autojev/scripts/mcp_server.py` as an MCP server and start with the
    `autojev_playbook` tool.
 
+Start by checking for a Jev API key: `$AUTOJEV doctor`. It reports status only, never the key. If it
+is missing, ask the user to run `$AUTOJEV setup` themselves (hidden prompt, saved to a git-ignored
+`.env`). **Never ask for the key in chat, and never put it in a command argument.** Without a key you
+can still build and test offline, but the engine is *not verified against Jev*, and you must say so.
+
 To stop: `$AUTOJEV stop`. That kills the watcher and deletes `.autojev/`; engines are kept.
 
 ## If you are working on this repository itself
@@ -21,7 +26,8 @@ To stop: `$AUTOJEV stop`. That kills the watcher and deletes `.autojev/`; engine
 - The spec is the source of truth for an engine; `scaffold.py` renders from it. Text from a spec
   reaches generated code, so anything interpolated into a docstring or comment goes through
   `one_line()` / `doc_literal()`; `tests/` has a hostile-spec test, keep it passing.
-- Do not add a tool that runs a caller-supplied command to the MCP server.
+- Do not add a tool that runs a caller-supplied command to the MCP server, or one that accepts the
+  API key. The key must never pass through the model or a transcript; tests must never print it.
 - `skills/autojev/SKILL.md` is the single source of the workflow (the CLI's `playbook` command and
   the MCP `autojev_playbook` tool serve it). Do not fork it per agent; put agent-specific
   material in `docs/portability.md`.

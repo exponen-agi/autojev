@@ -8,11 +8,17 @@ test suite that runs real processes. This page is everything you need.
 ```bash
 git clone https://github.com/exponen-agi/autojev.git
 cd autojev
-python -m unittest discover -s tests -v     # ~30 s; Python 3.10+, no installs
+python -m unittest discover -s tests -v     # ~1 min; Python 3.10+, no installs
+pip install typesafe-sdk                     # optional: also runs the live-path tests (see below)
 claude plugin validate .                    # only if you use Claude Code
 ```
 
 There is nothing to install. If a change needs a dependency, that is a design discussion first.
+
+The live code paths (auth, parallelism, pacing, retries, verification receipts) are tested with the
+**real `typesafe-sdk`** against a local stand-in server, `tests/fake_jev.py`. Without the SDK those
+tests skip and CI runs both ways. The stand-in proves plumbing, never Jev's judgment; do not write a
+test that treats its answers as one.
 
 ## What kinds of contribution help most
 
@@ -36,6 +42,8 @@ There is nothing to install. If a change needs a dependency, that is a design di
 4. **The MCP server never runs a caller-supplied command and never starts the watcher.** Do not add a tool
    that does. Handler commands belong to the operator.
 5. **Do not trust an agent's exit code.** The watcher's handler mode requires a receipt. Keep it that way.
+6. **The API key is a secret.** Never print it, log it, put it in an argument, or write it to a receipt.
+   `tests/test_autojev.py` proves `doctor` and `setup` never echo it; keep that true.
 6. **No model calls in the scripts.** The agent reasons; the scripts are deterministic and testable.
 7. **Offline tests prove the rules, not Jev's judgment.** Never word a message or doc as if they did.
 

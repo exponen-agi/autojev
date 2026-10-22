@@ -4,6 +4,10 @@
 
 Decide whether an expense claim can be reimbursed automatically or must be held for a manager before any money moves.
 
+## Verification
+
+**Not verified against live Jev.** The rules are tested offline only, with assumed answers. Run `python engine.py --verify` with a `TYPESAFE_API_KEY`.
+
 ## Designs considered
 
 | design | shape | fit | actionability | risk_fit | data | simplicity | total | verdict |

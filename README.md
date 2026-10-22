@@ -48,18 +48,33 @@ AutoJEV makes that meta-decision explicit, shows its reasoning, and only then wr
 claude plugin marketplace add exponen-agi/autojev
 claude plugin install autojev@autojev
 
-# 2. In any project, describe the decision
+# 2. In any project, describe the decision. It checks for your Jev key first
 /autojev should we auto-approve this expense claim, or send it to a manager?
 
-# 3. Run what it built, offline, no API key
-python decision_engines/expense-review-gate/engine.py --demo
+# 3. Run what it built, and verify it against the real Jev
+python decision_engines/expense-review-gate/engine.py --demo      # offline, no key
+python decision_engines/expense-review-gate/engine.py --verify    # live, in parallel
 
 # 4. When you are done
 /autojev-stop          # stops the watcher, deletes temp files, keeps your engine
 ```
 
+**Your Jev API key.** You can *build* an engine without one, but you cannot *verify* it, so AutoJEV
+checks for a key before anything else and asks how you want to proceed. The key is a secret: it is
+never requested in chat, printed, or committed.
+
+```bash
+python skills/autojev/scripts/autojev.py doctor            # is a key available? (never shows it)
+python skills/autojev/scripts/autojev.py setup             # hidden prompt, saves .env (mode 600, git-ignored)
+python skills/autojev/scripts/autojev.py doctor --verify   # does Jev accept it?
+```
+
+Or set `TYPESAFE_API_KEY` yourself, or copy `.env.example` to `.env`. In Claude Code, type
+`! python <path>/autojev.py setup` so it runs in your own shell and the key stays out of the
+conversation. Jev is in early access: [typesafe.ai](https://typesafe.ai).
+
 Not on Claude Code? See [Works with other agents](#works-with-other-agents). Requires Python 3.10+
-and nothing else. A `TYPESAFE_API_KEY` is needed only to call Jev live, never to build or test.
+and nothing else. `typesafe-sdk` is needed only to call Jev live.
 
 ## How it works
 
@@ -130,6 +145,7 @@ decision_engines/expense-review-gate/
 ├── decision_record.md   designs considered, scores, assumptions, risks, revision log
 ├── samples.json         cases with the outcome each should reach
 ├── test_engine.py       behavioural tests, no key needed
+├── verification.json    receipt from `--verify`: live result, model, tied to this exact spec
 ├── calibrate.py         confidence-vs-accuracy table on your own labelled data
 ├── jev_compat.py        the real SDK if installed, an offline stand-in if not
 └── README.md
@@ -166,6 +182,62 @@ def policy(a, composite, state):
     ...
     return {'outcome': 'human_review', 'rule': 'default', ...}   # "not sure" always has somewhere to go
 ```
+
+## Verified, not just generated
+
+Offline tests prove the rules route correctly *given assumed answers*. They cannot show that Jev's
+real answers lead those rules to the right outcomes. `--verify` does:
+
+```console
+$ python decision_engines/support-ticket-triage/engine.py --verify
+    sample                      expected              live Jev gave
+ok  spam-seo                    drop                  drop
+ok  duplicate-charge            fast_track_refund     fast_track_refund
+!!  outage-furious              priority_queue        route_to_department
+...
+6/7 agree (86%; need 75%) · model jev-1.13.0 · 700 input tokens · p50 154 ms, p95 188 ms · 0.6s wall at concurrency 4
+VERIFIED
+```
+
+(The layout is real; the numbers above are illustrative.) It also checks that every live answer stays inside
+the answer space the engine declared, and writes a receipt, `verification.json`, containing the model
+version that answered and a hash of the spec it was run against. **Change the spec and the receipt is
+marked stale** in the engine's README and decision record, so a green badge cannot outlive the thing it
+verified. If `TYPESAFE_BASE_URL` points anywhere but the default API (a proxy, a mock, a stub), the receipt and
+the decision record say **custom endpoint** instead of claiming real verification, and `doctor` warns. The generated `test_engine.py` also carries live tests that run when a key is present and skip
+with an explicit message when it is not.
+
+A disagreement is information, not a failure to hide: either the expected outcome was a wrong guess, or a
+question or threshold needs work. The workflow tells the agent never to edit an expectation just to pass,
+and to report disagreements it leaves in place.
+
+## Parallel by design
+
+Jev evaluates **every question of a case in parallel, inside one call**, so a decision costs one round
+trip however many questions it asks. AutoJEV designs for that (ask everything up front; do not split a
+decision across calls unless one answer genuinely feeds the next) and adds a second level for batches:
+
+```mermaid
+flowchart LR
+    B["<b>decide_many(cases)</b><br/>--concurrency N<br/>--max-rps R"]
+    B --> C1["case 1"] & C2["case 2"] & C3["case …"]
+    C1 --> J1["<b>one Jev call</b>"]
+    C2 --> J2["<b>one Jev call</b>"]
+    C3 --> J3["<b>one Jev call</b>"]
+    J1 --> Q1["Q1 · Q2 · Q3 …<br/><i>answered in parallel</i>"]
+    J2 --> Q2["Q1 · Q2 · Q3 …"]
+    J3 --> Q3["Q1 · Q2 · Q3 …"]
+    classDef jev fill:#10372f,stroke:#0d9e70,color:#fff
+    class J1,J2,J3 jev
+```
+
+```bash
+python engine.py --jsonl cases.jsonl --concurrency 4 --max-rps 15   # results in input order
+```
+
+It uses the SDK's async client, spaces request starts to stay under the published limit (1,200 requests a
+minute), isolates a failing case so it cannot stop the batch, and stops at once on a rejected key rather
+than hammering the API. `calibrate.py` and `--verify` use the same path.
 
 ## Choosing the shape
 
@@ -305,7 +377,11 @@ $AUTOJEV --help          # scan · build · validate · check · watch · stop �
 Generated code and background processes deserve suspicion, so these are deliberate:
 
 - **No key, no network** to build or test. Offline fixtures prove the *rules* route correctly. They do
-  not and cannot show how Jev will judge your data; engines and their decision records say so.
+  not and cannot show how Jev will judge your data; engines and their decision records say so, and
+  show **NOT verified against Jev** until `--verify` has run.
+- **Your API key stays out of the transcript.** `doctor` reports status and source, never the value.
+  `setup` takes it from a hidden prompt or stdin (never an argument, which shows in process lists), writes
+  `.env` with mode 600 and git-ignores it. No MCP tool accepts the key. Tests prove nothing prints it.
 - **Spec text is inert.** Titles, rationales and comments from a spec are escaped before they reach
   generated code, so a prompt-injected line in a project file cannot become executable code. A
   hostile-spec test guards this.
@@ -316,8 +392,14 @@ Generated code and background processes deserve suspicion, so these are delibera
   the watcher requires a receipt, and keeps unconfirmed changes.
 - **The watcher is cleaned up properly.** It verifies a pid is its own before signalling, kills a
   handler's whole process group, and `.env*`, `.git` and dependency folders are never read.
-- **Recalibration is bounded.** It edits only through the spec, rolls back on failure, and proposes
-  rather than applies any change of design.
+- **Recalibration is bounded.** It edits only through the spec, rolls back on failure, re-verifies live
+  when a key is available, and proposes rather than applies any change of design.
+
+**What was tested, honestly.** The live code paths (auth, parallelism, pacing, retries, receipts) were
+tested with the real `typesafe-sdk` against a local stand-in server that speaks the real wire format. That
+proves the plumbing. AutoJEV has **not been run against the production Jev API** in development, and the
+stand-in's answers are scripted, so nothing here says how Jev judges your data. Your first `--verify` is
+the first real test.
 
 ## FAQ
 
@@ -325,7 +407,18 @@ Generated code and background processes deserve suspicion, so these are delibera
 <summary><b>Does AutoJEV call an LLM, or Jev?</b></summary>
 
 No. Your agent does the reasoning in the workflow. The scripts are deterministic and call no model.
-The *engines it builds* call Jev, and only when you give them a `TYPESAFE_API_KEY`.
+The *engines it builds* call Jev, and only when you give them a `TYPESAFE_API_KEY`. The one exception
+you trigger yourself is `doctor --verify`, which makes a single tiny request to check the key.
+</details>
+
+<details>
+<summary><b>Do I need a Jev API key, and where does it go?</b></summary>
+
+To build an engine and test its rules: no. To *verify* it against Jev: yes. AutoJEV checks first and asks
+how you want to proceed (add it privately, set the environment variable, or continue offline and be told
+the engine is not verified). It is stored only in the environment or a git-ignored `.env` (mode 600), and
+is never printed, logged, put in a receipt, or accepted by an MCP tool. If you paste it into a chat anyway,
+treat it as exposed and rotate it.
 </details>
 
 <details>

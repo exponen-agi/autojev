@@ -13,14 +13,44 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
+KEY_ENV = "TYPESAFE_API_KEY"
+
+
+def _load_dotenv() -> None:
+    """Read TYPESAFE_API_KEY (and TYPESAFE_MODEL) from a .env near the engine, without overriding the
+    real environment and without needing python-dotenv. Looks in the working directory, the engine
+    folder, and the project root (decision_engines/<slug>/ -> two levels up)."""
+    here = Path(__file__).resolve().parent
+    for folder in (Path.cwd(), here, here.parent.parent):
+        path = folder / ".env"
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for raw in lines:
+            line = raw.strip().removeprefix("export ").lstrip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            if name.strip() in (KEY_ENV, "TYPESAFE_MODEL", "TYPESAFE_BASE_URL") and value:
+                os.environ.setdefault(name.strip(), value)
+
+
+_load_dotenv()
 MODEL = os.environ.get("TYPESAFE_MODEL", "jev-1.13.0")  # pinned: aliases move
 
 try:  # pragma: no cover - exercised only where the SDK is installed
-    from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+    from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, Score, TypeSafeClient
 
     HAVE_SDK = True
 except ImportError:
@@ -49,20 +79,40 @@ class MissingKey(RuntimeError):
     pass
 
 
-def get_client():
-    """The live, version-pinned client. Raises MissingKey with what to do about it."""
+NO_KEY_HELP = (
+    "TYPESAFE_API_KEY is not set. Put it in the environment or in a .env file at the project root "
+    "(never commit it). AutoJEV can store it safely: `python <autojev>/skills/autojev/scripts/autojev.py setup`. "
+    "Without a key the engine still runs offline (--demo), but nothing is verified against Jev."
+)
+
+
+def have_live() -> bool:
+    """True when a live call is possible: the SDK is installed and a key is available."""
+    return HAVE_SDK and bool(os.environ.get(KEY_ENV, "").strip())
+
+
+def _need_live() -> None:
     if not HAVE_SDK:
         raise MissingKey("typesafe-sdk is not installed: pip install typesafe-sdk")
-    if not os.environ.get("TYPESAFE_API_KEY"):
-        try:
-            from dotenv import load_dotenv
+    if not os.environ.get(KEY_ENV, "").strip():
+        raise MissingKey(NO_KEY_HELP)
 
-            load_dotenv()
-        except ImportError:
-            pass
-    if not os.environ.get("TYPESAFE_API_KEY"):
-        raise MissingKey("TYPESAFE_API_KEY is not set (see .env.example), or run with --offline")
+
+def require_live() -> None:
+    """Fail early, with what to do about it, before any other work, if a live call is impossible."""
+    _need_live()
+
+
+def get_client():
+    """The live, version-pinned client. Raises MissingKey with what to do about it."""
+    _need_live()
     return TypeSafeClient(model=MODEL)
+
+
+def get_async_client():
+    """The live async client, for running many cases concurrently."""
+    _need_live()
+    return AsyncTypeSafeClient(model=MODEL)
 
 
 # ------------------------------------------------------------------ offline replay

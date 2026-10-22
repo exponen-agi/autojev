@@ -6,6 +6,26 @@ All notable changes are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **API key handling.** `autojev.py doctor` reports whether a Jev key is available (environment or `.env`)
+  and, with `--verify`, whether Jev accepts it, without ever printing it. `autojev.py setup` saves it
+  privately (hidden prompt or stdin, never an argument; `.env` mode 600; added to `.gitignore`). The skill
+  checks for a key first and asks how to proceed when it is missing.
+- **Live verification.** `engine.py --verify` runs the samples through real Jev in parallel, checks every
+  answer stays inside the declared answer space, and writes `verification.json`: a receipt tied to a hash
+  of the spec, so a changed spec marks it stale. Generated tests include live checks that skip cleanly
+  without a key. Decision record and README state the verification status.
+- **Parallel execution.** `decide_many` and `--jsonl --concurrency N` run many cases at once on the SDK's
+  async client, with a request-per-second pacer under the published rate limit, per-case error isolation,
+  and fail-fast on a rejected key. `calibrate.py` uses it too.
+- Receipts record the endpoint (scheme and host only, never credentials). A run against a custom
+  `TYPESAFE_BASE_URL` is labelled as such in the receipt, README and decision record, and `doctor` warns,
+  so a stub cannot pass for real verification.
+- MCP tools `autojev_doctor` and `autojev_verify_engine` (no tool accepts the key).
+- The recalibrator re-verifies live after a safe change and rolls back if a previously verified engine
+  now fails.
+- Test stand-in server `tests/fake_jev.py`; CI runs with and without the SDK.
+
 ### Changed
 - README rewritten with diagrams, a real decision record, a trust-and-safety section and an FAQ.
 

@@ -6,10 +6,22 @@ Decide, for every inbound support message, whether to drop it, fast-track a poli
 
 ```bash
 python engine.py --demo            # offline, no key: replays samples.json
-python -m unittest test_engine -v # behavioural tests, no key
+python -m unittest test_engine -v # behavioural tests; live ones run only if a key is set
+python engine.py --verify          # LIVE: samples through real Jev, in parallel -> verification.json
 python engine.py --state case.json  # live (TYPESAFE_API_KEY)
+python engine.py --jsonl cases.jsonl --concurrency 4   # many cases at once
 python calibrate.py labelled.jsonl --question <name>   # earn your thresholds
 ```
+
+## Verification
+
+**Not verified against live Jev.** The rules are tested offline only, with assumed answers. Run `python engine.py --verify` with a `TYPESAFE_API_KEY`.
+
+Offline tests prove the rules route correctly *given* assumed answers. `--verify` runs the same samples through the real Jev, so it shows whether Jev's answers lead those rules to the same outcomes. It needs a `TYPESAFE_API_KEY` (environment, or a git-ignored `.env`). A disagreement is information, not automatically a bug: never edit an expectation just to make it pass.
+
+## Parallelism
+
+One call answers every question in parallel, so a decision costs one round trip however many questions it asks. `decide_many` / `--jsonl --concurrency N` also runs many cases at once, capped by `--max-rps` (default 15; the published limit is 1,200 requests/minute).
 
 ## Outcomes
 

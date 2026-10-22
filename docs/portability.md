@@ -61,8 +61,13 @@ Things in the instructions that name Claude Code features have a stated generic 
 
 Start the agent with a system prompt like *"Call `autojev_playbook` and follow it."* Tools:
 `autojev_playbook`, `autojev_reference`, `autojev_example`, `autojev_inventory`,
-`autojev_validate_spec`, `autojev_build_engine`, `autojev_check_engine`, `autojev_snapshot`,
+`autojev_validate_spec`, `autojev_build_engine`, `autojev_check_engine`, `autojev_doctor`,
+`autojev_verify_engine`, `autojev_snapshot`,
 `autojev_watch_status`, `autojev_read_changes`, `autojev_ack_changes`, `autojev_stop`.
+
+By design the server **cannot start the watcher, run a command, or accept your API key**. Add the key
+yourself with `autojev.py setup` (hidden prompt, saved to a git-ignored `.env`); `autojev_doctor` only
+reports whether one exists.
 
 By design the server **cannot start the watcher or run a command**. Those stay with whoever
 operates the agent (section 3). `autojev_build_engine` writes only under

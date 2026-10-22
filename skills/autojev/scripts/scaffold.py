@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import importlib.util
 import io
 import json
@@ -331,23 +332,30 @@ Shape   : {one_line(spec["shape"])}
 
 Run it:
     python engine.py --demo                 offline, replays samples.json (no key)
+    python engine.py --verify               LIVE: run the samples through Jev in parallel, write verification.json
     python engine.py --state case.json      live; needs TYPESAFE_API_KEY
-    python engine.py --jsonl cases.jsonl    live, one JSON state per line
+    python engine.py --jsonl cases.jsonl    live, many cases at once (--concurrency N)
 """
     L.append(doc_literal(doc))
     L.append(f'''
 from __future__ import annotations
 
 import argparse
+import asyncio
+import hashlib
 import json
+import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from jev_compat import (  # noqa: E402
-    Choice, Noul, OfflineClient, Score, MissingKey, canonical, get_client,
+    Choice, Noul, OfflineClient, Score, MissingKey, canonical, get_async_client, get_client, have_live,
+    require_live,
 )
 
 HERE = Path(__file__).parent
@@ -455,65 +463,55 @@ def summarize(a) -> dict:
         else:
             out[name] = {"score": round(ans.score, 3), "confidence": round(ans.confidence, 3)}
     return out
-
-
-def decide(state: dict, client=None) -> dict:
-    """One Jev call -> one outcome. `client` defaults to the live, version-pinned client."""
-    client = client or get_client()
-    started = time.perf_counter()
-    response = client.system_one(state=trim(state), questions=QUESTIONS)
-    a = response.answers
-    composite = compute_composites(a)
-    result = policy(a, composite, state)
-    result.update(
-        composite={k: round(v, 3) for k, v in composite.items()},
-        answers=summarize(a),
-        model=response.model,
-        latency_ms=round((time.perf_counter() - started) * 1000, 1),
-    )
-    return result
-
-
-def offline_client() -> OfflineClient:
-    samples = json.loads((HERE / "samples.json").read_text())
-    return OfflineClient({canonical(trim(s["state"])): s["fixture"] for s in samples})
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\\n\\n")[0])
-    ap.add_argument("--demo", "--offline", dest="demo", action="store_true",
-                    help="replay samples.json with canned answers (tests the policy, not Jev)")
-    ap.add_argument("--state", help="path to a JSON file holding one state")
-    ap.add_argument("--jsonl", help="path to a file with one JSON state per line")
-    args = ap.parse_args()
-
-    try:
-        if args.demo:
-            client = offline_client()
-            for s in json.loads((HERE / "samples.json").read_text()):
-                r = decide(s["state"], client)
-                flag = "ok " if r["outcome"] == s.get("expect") else "!! "
-                print(f"{flag}{s['id']:<22} -> {r['outcome']:<18} via {r['rule']}")
-            print("\\n(offline: canned answers. This exercises the rules, not Jev's judgment.)")
-        elif args.state:
-            print(json.dumps(decide(json.loads(Path(args.state).read_text())), indent=2))
-        elif args.jsonl:
-            client = get_client()
-            for line in Path(args.jsonl).read_text().splitlines():
-                if line.strip():
-                    print(json.dumps(decide(json.loads(line), client)))
-        else:
-            ap.print_help()
-    except MissingKey as exc:
-        print(f"{exc}", file=sys.stderr)
-        return 2
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
 ''')
+    L.append((TEMPLATES / "engine_tail.txt").read_text())
     return "\n".join(L)
+
+
+def spec_sha256(spec: dict) -> str:
+    """Same canonical form the generated engine uses, so a receipt can say which spec it was for."""
+    canon = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canon.encode()).hexdigest()
+
+
+def verification_status(out: Path, spec: dict) -> dict:
+    """none | stale | failed | passed, from verification.json beside the engine."""
+    path = out / "verification.json"
+    if not path.is_file():
+        return {"state": "none"}
+    try:
+        report = json.loads(path.read_text())
+    except ValueError:
+        return {"state": "none", "note": "verification.json is unreadable"}
+    raw = json.loads((out / "spec.json").read_text()) if (out / "spec.json").is_file() else {}
+    fresh = report.get("spec_sha256") == spec_sha256(raw)
+    state = "stale" if not fresh else ("passed" if report.get("passed") else "failed")
+    return {"state": state, "report": report}
+
+
+def describe_verification(v: dict) -> str:
+    r = v.get("report") or {}
+    head = {
+        "none": "**Not verified against live Jev.** The rules are tested offline only, with assumed answers. "
+                "Run `python engine.py --verify` with a `TYPESAFE_API_KEY`.",
+        "stale": "**Stale.** `verification.json` was recorded for an older spec. Re-run `python engine.py --verify`.",
+        "failed": "**Verification ran and did not pass.**",
+        "passed": "**Verified against live Jev.**",
+    }[v["state"]]
+    custom = (v.get("report") or {}).get("endpoint", "default")
+    if custom != "default" and v["state"] in ("passed", "failed"):
+        head = (f"**{'Passed' if v['state'] == 'passed' else 'Ran and did not pass'} against a custom endpoint** "
+                f"(`{custom}`), not the default Jev API. It may be a proxy, a mock or a stub, so treat it as a "
+                "test of plumbing, not as verification of Jev's judgment.")
+    if r:
+        head += (f" {r.get('agreed')}/{r.get('samples')} samples reached their expected outcome "
+                 f"({r.get('agreement', 0):.0%}, needed {r.get('min_agreement', 0):.0%}) on "
+                 f"{', '.join(r.get('models') or ['an unknown model'])} at {r.get('verified_at')}.")
+        if r.get("answer_space_problems"):
+            head += f" {len(r['answer_space_problems'])} answer-space problem(s)."
+        if v["state"] == "stale":
+            head += " (The numbers above are from the older spec.)"
+    return head
 
 
 def render_test(spec: dict) -> str:
@@ -565,19 +563,73 @@ class PolicyTests(unittest.TestCase):
         noisy = dict(SAMPLES[0]["state"], __noise__="x" * 1000)
         self.assertNotIn("__noise__", engine.trim(noisy))
 
+    def test_many_cases_run_concurrently_and_keep_their_order(self):
+        states = [s["state"] for s in SAMPLES] * 3
+        results = engine.decide_many(states, self.client, concurrency=5)
+        self.assertEqual([r["outcome"] for r in results],
+                         [engine.decide(st, self.client)["outcome"] for st in states])
+
+    def test_one_bad_case_does_not_stop_the_batch(self):
+        results = engine.decide_many([SAMPLES[0]["state"], {{"unknown": "case"}}, SAMPLES[0]["state"]],
+                                     self.client, concurrency=2)
+        self.assertEqual(results[0]["outcome"], results[2]["outcome"])
+        self.assertIsNone(results[1]["outcome"])
+        self.assertIn("error", results[1])
+
+
+@unittest.skipUnless(engine.have_live(), "live verification not run: no TYPESAFE_API_KEY (or typesafe-sdk "
+                     "not installed). Offline tests above passed; nothing was verified against Jev itself.")
+class LiveTests(unittest.TestCase):
+    """Run only when a key is available: the same samples, answered by the real Jev, in parallel.
+
+    Set AUTOJEV_MIN_AGREEMENT to change how many must reach their expected outcome (default 0.75).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        minimum = float(os.environ.get("AUTOJEV_MIN_AGREEMENT", "0.75"))
+        cls.report = engine.verify(min_agreement=minimum, write=False)
+
+    def test_no_case_errored(self):
+        errored = [c["id"] for c in self.report["cases"] if c["error"]]
+        self.assertEqual(errored, [], "live calls failed")
+
+    def test_live_answers_stay_inside_the_declared_answer_space(self):
+        self.assertEqual(self.report["answer_space_problems"], [])
+
+    def test_live_outcomes_agree_with_the_expected_ones(self):
+        misses = [(c["id"], c["expected"], c["got"]) for c in self.report["cases"] if not c["match"]]
+        self.assertGreaterEqual(
+            self.report["agreement"], self.report["min_agreement"],
+            f"{{self.report['agreed']}}/{{self.report['samples']}} agree. Disagreements (id, expected, live): {{misses}}. "
+            "Each is information: a wrong expectation, or a question/threshold that needs work. "
+            "Do not edit an expectation just to pass.")
+
 
 if __name__ == "__main__":
     unittest.main()
 '''
 
 
-def render_readme(spec: dict) -> str:
+def render_readme(spec: dict, v: dict | None = None) -> str:
     L = [f"# {spec['title']}", "", spec["problem"], "",
          f"**Design:** `{spec['shape']}` — see [decision_record.md](decision_record.md) for why.", "",
          "```bash", "python engine.py --demo            # offline, no key: replays samples.json",
-         "python -m unittest test_engine -v # behavioural tests, no key",
+         "python -m unittest test_engine -v # behavioural tests; live ones run only if a key is set",
+         "python engine.py --verify          # LIVE: samples through real Jev, in parallel -> verification.json",
          "python engine.py --state case.json  # live (TYPESAFE_API_KEY)",
+         "python engine.py --jsonl cases.jsonl --concurrency 4   # many cases at once",
          "python calibrate.py labelled.jsonl --question <name>   # earn your thresholds", "```", "",
+         "## Verification", "", describe_verification(v or {"state": "none"}), "",
+         "Offline tests prove the rules route correctly *given* assumed answers. `--verify` runs the same "
+         "samples through the real Jev, so it shows whether Jev's answers lead those rules to the same "
+         "outcomes. It needs a `TYPESAFE_API_KEY` (environment, or a git-ignored `.env`). A disagreement is "
+         "information, not automatically a bug: never edit an expectation just to make it pass.", "",
+         "## Parallelism", "",
+         "One call answers every question in parallel, so a decision costs one round trip however many "
+         "questions it asks. `decide_many` / `--jsonl --concurrency N` also runs many cases at once, "
+         "capped by `--max-rps` (default 15; the published limit is 1,200 requests/minute).", "",
          "## Outcomes", "", "| outcome | kind | meaning |", "|---|---|---|"]
     for k, o in spec["outcomes"].items():
         L.append(f"| `{k}` | {o['kind']} | {o.get('description', '')} |")
@@ -596,8 +648,9 @@ def render_readme(spec: dict) -> str:
     return "\n".join(L) + "\n"
 
 
-def render_record(spec: dict, findings: list[Finding]) -> str:
-    L = [f"# Decision record — {spec['title']}", "", "## Problem", "", spec["problem"], ""]
+def render_record(spec: dict, findings: list[Finding], v: dict | None = None) -> str:
+    L = [f"# Decision record — {spec['title']}", "", "## Problem", "", spec["problem"], "",
+         "## Verification", "", describe_verification(v or {"state": "none"}), ""]
     cands = spec["candidates"]
     if cands:
         L += ["## Designs considered", "",
@@ -700,8 +753,9 @@ def build(spec_path: Path, out: Path) -> tuple[list[Finding], dict]:
     unit = run_unit_tests(out) if not any(f.level == "error" for f in findings) else None
     if unit:
         findings.append(unit)
-    (out / "README.md").write_text(render_readme(spec))
-    (out / "decision_record.md").write_text(render_record(spec, findings))
+    v = verification_status(out, spec)
+    (out / "README.md").write_text(render_readme(spec, v))
+    (out / "decision_record.md").write_text(render_record(spec, findings, v))
     return findings, spec
 
 
@@ -733,13 +787,17 @@ def main(argv: list[str] | None = None) -> int:
         spec = load_spec(out / "spec.json")
         findings = validate(spec) + post_build_check(out, spec)
         unit = run_unit_tests(out)
-        return report(findings + ([unit] if unit else []))
+        code = report(findings + ([unit] if unit else []))
+        print("Verification:", describe_verification(verification_status(out, spec)).replace("**", ""))
+        return code
 
     findings, spec = build(Path(args.spec), Path(args.out))
     code = report(findings)
     if code == 0:
         print(f"built {args.out}/  (engine.py, spec.json, samples.json, test_engine.py, "
               f"calibrate.py, README.md, decision_record.md)")
+        status = verification_status(Path(args.out), spec)
+        print("Verification:", describe_verification(status).replace("**", ""))
     return code
 
 

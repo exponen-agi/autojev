@@ -7,6 +7,8 @@
     autojev.py build SPEC --out DIR       validate a spec, render the engine, self-check, run tests
     autojev.py validate SPEC              static checks only
     autojev.py check DIR                  re-run the checks on an existing engine
+    autojev.py doctor [--verify]          is a Jev API key available, and does Jev accept it? (never prints it)
+    autojev.py setup [--stdin]            save the key to .env privately (hidden prompt; mode 600; git-ignored)
     autojev.py watch run|status|ack ...   the background watcher (see watch.py --help)
     autojev.py stop [--dry-run]           stop the watcher, delete .autojev/, keep the engines
     autojev.py playbook                   the full workflow an agent follows (same as SKILL.md)
@@ -84,6 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     if cmd in {"build", "validate", "check"}:
         import scaffold
         return scaffold.main([cmd, *rest])
+    if cmd in {"doctor", "setup"}:
+        import keys
+        return keys.main([cmd, *rest])
     if cmd == "watch":
         import watch
         return watch.main(rest)

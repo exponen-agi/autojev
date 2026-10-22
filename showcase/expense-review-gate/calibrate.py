@@ -10,7 +10,7 @@ Output is the calibration table: bucket the answers by what Jev reported, then m
 often it was actually right. Accuracy that climbs with confidence is what makes a threshold
 mean something. A flat table means no threshold in engine.py should be trusted yet.
 
-Needs TYPESAFE_API_KEY. This is the step that turns a first-guess threshold into evidence.
+Needs TYPESAFE_API_KEY (environment or a git-ignored .env). Rows run in parallel. This is the step that turns a first-guess threshold into evidence.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import engine  # noqa: E402
-from jev_compat import get_client  # noqa: E402
+from jev_compat import MissingKey  # noqa: E402
 
 EDGES = [0.0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0001]
 
@@ -39,20 +39,25 @@ def bucket_report(pairs: list[tuple[float, bool]], edges: list[float] = EDGES) -
     return rows
 
 
-def collect(rows: list[dict], question: str, client) -> list[tuple[float, bool]]:
+def collect(rows: list[dict], question: str, client=None, concurrency: int = 4,
+            max_rps: float = 15.0) -> tuple[list[tuple[float, bool]], int]:
+    """Score every labelled row (cases run in parallel) -> ([(confidence, correct)], skipped)."""
     q = engine.QUESTIONS[question]
-    pairs = []
-    for row in rows:
-        state = engine.trim(row["state"])
-        ans = client.system_one(state=state, questions=engine.QUESTIONS).answers[question]
+    results = engine.decide_many([row["state"] for row in rows], client, concurrency, max_rps)
+    pairs, skipped = [], 0
+    for row, res in zip(rows, results):
+        ans = (res.get("answers") or {}).get(question)
+        if ans is None:
+            skipped += 1
+            continue
         if q.type == "choice":
-            pairs.append((ans.confidence, ans.choice == row["label"]))
+            pairs.append((ans["confidence"], ans["choice"] == row["label"]))
         elif q.type == "noul":
-            predicted = ans.noul >= 0.5
-            pairs.append((max(ans.noul, 1 - ans.noul), predicted == bool(row["label"])))
+            predicted = ans["noul"] >= 0.5
+            pairs.append((max(ans["noul"], 1 - ans["noul"]), predicted == bool(row["label"])))
         else:
             raise SystemExit("calibrate.py supports choice and noul questions")
-    return pairs
+    return pairs, skipped
 
 
 def main() -> int:
@@ -60,11 +65,25 @@ def main() -> int:
     ap.add_argument("data")
     ap.add_argument("--question", required=True, choices=sorted(engine.QUESTIONS))
     ap.add_argument("--limit", type=int, default=500)
+    ap.add_argument("--concurrency", type=int, default=4)
+    ap.add_argument("--max-rps", type=float, default=15.0)
     args = ap.parse_args()
 
     rows = [json.loads(line) for line in Path(args.data).read_text().splitlines() if line.strip()]
     rows = rows[: args.limit]
-    report = bucket_report(collect(rows, args.question, get_client()))
+    try:
+        pairs, skipped = collect(rows, args.question, None, args.concurrency, args.max_rps)
+    except MissingKey as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    except Exception as exc:
+        if type(exc).__name__ in engine._FATAL:
+            print(f"Jev rejected the API key ({type(exc).__name__}).", file=sys.stderr)
+            return 2
+        raise
+    report = bucket_report(pairs)
+    if skipped:
+        print(f"({skipped} row(s) failed and were left out)")
     print(f"{'confidence':<12}{'n':>6}{'accuracy':>10}")
     for r in report:
         print(f"{r['band']:<12}{r['n']:>6}{r['accuracy']:>10.1%}")

@@ -4,6 +4,10 @@
 
 Decide, for every inbound support message, whether to drop it, fast-track a policy-backed refund, escalate an urgent or angry customer, route it to a department, or hand it to a person.
 
+## Verification
+
+**Not verified against live Jev.** The rules are tested offline only, with assumed answers. Run `python engine.py --verify` with a `TYPESAFE_API_KEY`.
+
 ## Designs considered
 
 | design | shape | fit | actionability | risk_fit | data | simplicity | total | verdict |
