@@ -46,6 +46,49 @@ class PolicyTests(unittest.TestCase):
         noisy = dict(SAMPLES[0]["state"], __noise__="x" * 1000)
         self.assertNotIn("__noise__", engine.trim(noisy))
 
+    def test_many_cases_run_concurrently_and_keep_their_order(self):
+        states = [s["state"] for s in SAMPLES] * 3
+        results = engine.decide_many(states, self.client, concurrency=5)
+        self.assertEqual([r["outcome"] for r in results],
+                         [engine.decide(st, self.client)["outcome"] for st in states])
+
+    def test_one_bad_case_does_not_stop_the_batch(self):
+        results = engine.decide_many([SAMPLES[0]["state"], {"unknown": "case"}, SAMPLES[0]["state"]],
+                                     self.client, concurrency=2)
+        self.assertEqual(results[0]["outcome"], results[2]["outcome"])
+        self.assertIsNone(results[1]["outcome"])
+        self.assertIn("error", results[1])
+
+
+@unittest.skipUnless(engine.have_live(), "live verification not run: no TYPESAFE_API_KEY (or typesafe-sdk "
+                     "not installed). Offline tests above passed; nothing was verified against Jev itself.")
+class LiveTests(unittest.TestCase):
+    """Run only when a key is available: the same samples, answered by the real Jev, in parallel.
+
+    Set AUTOJEV_MIN_AGREEMENT to change how many must reach their expected outcome (default 0.75).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        minimum = float(os.environ.get("AUTOJEV_MIN_AGREEMENT", "0.75"))
+        cls.report = engine.verify(min_agreement=minimum, write=False)
+
+    def test_no_case_errored(self):
+        errored = [c["id"] for c in self.report["cases"] if c["error"]]
+        self.assertEqual(errored, [], "live calls failed")
+
+    def test_live_answers_stay_inside_the_declared_answer_space(self):
+        self.assertEqual(self.report["answer_space_problems"], [])
+
+    def test_live_outcomes_agree_with_the_expected_ones(self):
+        misses = [(c["id"], c["expected"], c["got"]) for c in self.report["cases"] if not c["match"]]
+        self.assertGreaterEqual(
+            self.report["agreement"], self.report["min_agreement"],
+            f"{self.report['agreed']}/{self.report['samples']} agree. Disagreements (id, expected, live): {misses}. "
+            "Each is information: a wrong expectation, or a question/threshold that needs work. "
+            "Do not edit an expectation just to pass.")
+
 
 if __name__ == "__main__":
     unittest.main()

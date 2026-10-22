@@ -10,9 +10,14 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.13"]
+        sdk: [with-sdk, without-sdk]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      # The live paths (auth, parallelism, receipts) run the real typesafe-sdk against a local
+      # stand-in server. Without the SDK those tests skip, and the offline paths are tested alone.
+      - if: matrix.sdk == 'with-sdk'
+        run: pip install typesafe-sdk
       - run: python -m unittest discover -s tests -v

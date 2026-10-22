@@ -10,22 +10,29 @@ Shape   : gate
 
 Run it:
     python engine.py --demo                 offline, replays samples.json (no key)
+    python engine.py --verify               LIVE: run the samples through Jev in parallel, write verification.json
     python engine.py --state case.json      live; needs TYPESAFE_API_KEY
-    python engine.py --jsonl cases.jsonl    live, one JSON state per line
+    python engine.py --jsonl cases.jsonl    live, many cases at once (--concurrency N)
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import hashlib
 import json
+import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from jev_compat import (  # noqa: E402
-    Choice, Noul, OfflineClient, Score, MissingKey, canonical, get_client,
+    Choice, Noul, OfflineClient, Score, MissingKey, canonical, get_async_client, get_client, have_live,
+    require_live,
 )
 
 HERE = Path(__file__).parent
@@ -135,11 +142,14 @@ def summarize(a) -> dict:
     return out
 
 
-def decide(state: dict, client=None) -> dict:
-    """One Jev call -> one outcome. `client` defaults to the live, version-pinned client."""
-    client = client or get_client()
-    started = time.perf_counter()
-    response = client.system_one(state=trim(state), questions=QUESTIONS)
+
+def usage_of(response) -> dict:
+    u = getattr(response, "usage", None)
+    return {"input_tokens": getattr(u, "input_tokens", None),
+            "output_tokens": getattr(u, "output_tokens", None)} if u else {}
+
+
+def _finish(response, state: dict, started: float) -> dict:
     a = response.answers
     composite = compute_composites(a)
     result = policy(a, composite, state)
@@ -147,9 +157,221 @@ def decide(state: dict, client=None) -> dict:
         composite={k: round(v, 3) for k, v in composite.items()},
         answers=summarize(a),
         model=response.model,
+        usage=usage_of(response),
         latency_ms=round((time.perf_counter() - started) * 1000, 1),
     )
     return result
+
+
+def decide(state: dict, client=None) -> dict:
+    """One Jev call -> one outcome.
+
+    Every question in QUESTIONS is answered in parallel *inside* that single call, so adding a
+    question adds almost no latency. `client` defaults to the live, version-pinned client.
+    """
+    client = client or get_client()
+    started = time.perf_counter()
+    return _finish(client.system_one(state=trim(state), questions=QUESTIONS), state, started)
+
+
+async def decide_async(state: dict, client) -> dict:
+    started = time.perf_counter()
+    return _finish(await client.system_one(state=trim(state), questions=QUESTIONS), state, started)
+
+
+# ----------------------------------------------------------- many cases at once
+
+
+class _Pacer:
+    """Keeps request starts at least 1/max_rps apart, to stay under the API's rate limit."""
+
+    def __init__(self, max_rps):
+        self.interval = 1.0 / max_rps if max_rps and max_rps > 0 else 0.0
+        self._next = 0.0
+        self._lock = None
+
+    async def wait(self) -> None:
+        if not self.interval:
+            return
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            now = time.monotonic()
+            delay = self._next - now
+            self._next = max(now, self._next) + self.interval
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+
+_FATAL = {"TypeSafeAuthenticationError", "TypeSafePermissionDeniedError"}  # every case would fail the same way
+
+
+async def _decide_many_live(states: list, concurrency: int, max_rps: float) -> list[dict]:
+    client = get_async_client()
+    gate = asyncio.Semaphore(max(1, concurrency))
+    pacer = _Pacer(max_rps)
+    fatal: list[BaseException] = []
+
+    async def one(state):
+        async with gate:
+            if fatal:
+                raise fatal[0]
+            await pacer.wait()
+            try:
+                return await decide_async(state, client)
+            except Exception as exc:
+                if type(exc).__name__ in _FATAL:
+                    fatal.append(exc)
+                    raise
+                return {"outcome": None, "error": f"{type(exc).__name__}: {exc}"}
+
+    try:
+        results = await asyncio.gather(*(one(s) for s in states), return_exceptions=True)
+    finally:
+        await client.aclose()
+    if fatal:
+        raise fatal[0]
+    return list(results)
+
+
+def decide_many(states, client=None, concurrency: int = 4, max_rps: float = 15.0) -> list[dict]:
+    """Decide many cases at once. Results come back in input order.
+
+    Two levels of parallelism: Jev already answers every question of one case in parallel; this
+    runs up to `concurrency` cases at the same time. `max_rps` caps request starts per second
+    (the published limit is 1,200 requests/minute = 20/s); the SDK also retries 429s itself.
+
+    A case that fails comes back as {"outcome": None, "error": ...} and does not stop the rest.
+    A rejected key stops everything, because every case would fail the same way.
+    With `client=None` it uses the SDK's async client; pass a sync client (the offline fixture
+    client, or your own) and it runs the cases on a thread pool instead.
+    """
+    states = list(states)
+    if client is None:
+        return asyncio.run(_decide_many_live(states, concurrency, max_rps))
+
+    def one(state):
+        try:
+            return decide(state, client)
+        except Exception as exc:
+            return {"outcome": None, "error": f"{type(exc).__name__}: {exc}"}
+
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        return list(pool.map(one, states))
+
+
+# ---------------------------------------------------- verification against live Jev
+
+
+def endpoint_label() -> str:
+    """Where live calls go: 'default' (the production API) or the scheme://host of an override.
+    Only scheme, host and port are kept, so a receipt can never carry credentials from a URL."""
+    raw = os.environ.get("TYPESAFE_BASE_URL", "").strip()
+    if not raw:
+        return "default"
+    parts = urlsplit(raw)
+    return f"{parts.scheme}://{parts.hostname}" + (f":{parts.port}" if parts.port else "")
+
+
+def spec_sha256():
+    """Fingerprint of spec.json, so a verification receipt can tell it was for *this* spec."""
+    try:
+        spec = json.loads((HERE / "spec.json").read_text())
+    except (OSError, ValueError):
+        return None
+    canon = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canon.encode()).hexdigest()
+
+
+def conformance_problems(answers: dict) -> list[str]:
+    """Live answers must stay inside the answer space QUESTIONS declared. Jev guarantees this
+    structurally; checking it anyway is what makes the guarantee verifiable here."""
+    problems = []
+    for name, ans in (answers or {}).items():
+        q = QUESTIONS.get(name)
+        if q is None:
+            problems.append(f"{name}: answered a question that was not asked")
+        elif "noul" in ans and not 0.0 <= ans["noul"] <= 1.0:
+            problems.append(f"{name}: noul {ans['noul']} outside [0, 1]")
+        elif "choice" in ans and ans["choice"] not in q.criteria:
+            problems.append(f"{name}: choice {ans['choice']!r} is not one of the declared options")
+        elif "score" in ans and not 0.0 <= ans["score"] <= len(q.criteria) - 1:
+            problems.append(f"{name}: score {ans['score']} outside the declared levels")
+        if "confidence" in ans and not 0.0 <= ans["confidence"] <= 1.0:
+            problems.append(f"{name}: confidence {ans['confidence']} outside [0, 1]")
+    return problems
+
+
+def _percentile(sorted_values: list, pct: float):
+    if not sorted_values:
+        return None
+    return sorted_values[min(len(sorted_values) - 1, int(round(pct / 100 * (len(sorted_values) - 1))))]
+
+
+def verify(min_agreement: float = 0.75, concurrency: int = 4, max_rps: float = 15.0, write: bool = True) -> dict:
+    """Run every sample through LIVE Jev, in parallel, and compare with the expected outcomes.
+
+    Offline tests show the rules route correctly *given* assumed answers. This shows whether Jev's
+    real answers lead the same rules to the same outcomes. A disagreement is information, not
+    automatically a bug: either the expectation was a wrong guess, or a question or threshold needs
+    work. Never edit an expectation just to make this pass.
+
+    Writes verification.json (a receipt tied to this exact spec) unless write=False.
+    """
+    samples = json.loads((HERE / "samples.json").read_text())
+    began = time.perf_counter()
+    results = decide_many([s["state"] for s in samples], None, concurrency, max_rps)
+    wall_s = time.perf_counter() - began
+
+    cases, problems = [], []
+    for s, r in zip(samples, results):
+        problems += [f"{s['id']}: {p}" for p in conformance_problems(r.get("answers"))]
+        cases.append({
+            "id": s["id"], "expected": s["expect"], "got": r.get("outcome"), "rule": r.get("rule"),
+            "match": r.get("outcome") == s["expect"], "error": r.get("error"),
+            "answers": r.get("answers"), "latency_ms": r.get("latency_ms"),
+        })
+    agreed = sum(c["match"] for c in cases)
+    latencies = sorted(c["latency_ms"] for c in cases if c["latency_ms"] is not None)
+    errors = sum(1 for c in cases if c["error"])
+    agreement = agreed / len(cases) if cases else 0.0
+    report = {
+        "verified_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "spec_sha256": spec_sha256(),
+        "endpoint": endpoint_label(),
+        "models": sorted({r["model"] for r in results if r.get("model")}),
+        "samples": len(cases), "agreed": agreed, "agreement": round(agreement, 3),
+        "min_agreement": min_agreement, "errors": errors,
+        "answer_space_problems": problems,
+        "input_tokens": sum((r.get("usage") or {}).get("input_tokens") or 0 for r in results),
+        "latency_ms": {"p50": _percentile(latencies, 50), "p95": _percentile(latencies, 95)},
+        "wall_s": round(wall_s, 2), "concurrency": concurrency,
+        "passed": bool(cases) and not problems and not errors and agreement >= min_agreement,
+        "cases": cases,
+    }
+    if write:
+        (HERE / "verification.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    return report
+
+
+def print_verification(report: dict) -> None:
+    print(f"{'':4}{'sample':<28}{'expected':<22}{'live Jev gave':<22}")
+    for c in report["cases"]:
+        mark = "ok" if c["match"] else ("ERR" if c["error"] else "!!")
+        print(f"{mark:<4}{c['id']:<28}{c['expected']:<22}{(c['got'] or c['error'] or '-')[:40]:<22}")
+    models = ", ".join(report["models"]) or "unknown"
+    lat = report["latency_ms"]
+    if report.get("endpoint", "default") != "default":
+        print(f"\nNOTE: calls went to a custom endpoint ({report['endpoint']}), not the default Jev API. "
+              "A proxy, mock or stub proves plumbing, not Jev's judgment.", end="")
+    print(f"\n{report['agreed']}/{report['samples']} agree ({report['agreement']:.0%}; need {report['min_agreement']:.0%}) "
+          f"· model {models} · {report['input_tokens']} input tokens · "
+          f"p50 {lat['p50']} ms, p95 {lat['p95']} ms · {report['wall_s']}s wall at concurrency {report['concurrency']}")
+    for p in report["answer_space_problems"]:
+        print(f"ANSWER-SPACE PROBLEM: {p}")
+    if report["errors"]:
+        print(f"{report['errors']} case(s) errored; see verification.json")
+    print("VERIFIED" if report["passed"] else "NOT VERIFIED")
 
 
 def offline_client() -> OfflineClient:
@@ -161,8 +383,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     ap.add_argument("--demo", "--offline", dest="demo", action="store_true",
                     help="replay samples.json with canned answers (tests the policy, not Jev)")
+    ap.add_argument("--verify", action="store_true",
+                    help="run the samples through LIVE Jev in parallel and write verification.json")
+    ap.add_argument("--min-agreement", type=float, default=0.75,
+                    help="share of samples that must reach their expected outcome (default 0.75)")
     ap.add_argument("--state", help="path to a JSON file holding one state")
     ap.add_argument("--jsonl", help="path to a file with one JSON state per line")
+    ap.add_argument("--concurrency", type=int, default=4, help="cases in flight at once (default 4)")
+    ap.add_argument("--max-rps", type=float, default=15.0,
+                    help="cap on request starts per second (default 15; the published limit is 20)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output for --verify")
+    ap.add_argument("--no-write", action="store_true", help="--verify: do not write verification.json")
     args = ap.parse_args()
 
     try:
@@ -173,18 +404,40 @@ def main() -> int:
                 flag = "ok " if r["outcome"] == s.get("expect") else "!! "
                 print(f"{flag}{s['id']:<22} -> {r['outcome']:<18} via {r['rule']}")
             print("\n(offline: canned answers. This exercises the rules, not Jev's judgment.)")
+        elif args.verify:
+            require_live()
+            report = verify(args.min_agreement, args.concurrency, args.max_rps, write=not args.no_write)
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                print_verification(report)
+            return 0 if report["passed"] else 1
         elif args.state:
             print(json.dumps(decide(json.loads(Path(args.state).read_text())), indent=2))
         elif args.jsonl:
-            client = get_client()
-            for line in Path(args.jsonl).read_text().splitlines():
+            require_live()      # say "no key" before complaining about the file
+            states = []
+            for n, line in enumerate(Path(args.jsonl).read_text().splitlines(), 1):
                 if line.strip():
-                    print(json.dumps(decide(json.loads(line), client)))
+                    try:
+                        states.append(json.loads(line))
+                    except ValueError as exc:
+                        print(f"{args.jsonl}: line {n} is not valid JSON ({exc}); expected one JSON state per line",
+                              file=sys.stderr)
+                        return 2
+            for result in decide_many(states, None, args.concurrency, args.max_rps):
+                print(json.dumps(result))
         else:
             ap.print_help()
     except MissingKey as exc:
         print(f"{exc}", file=sys.stderr)
         return 2
+    except Exception as exc:
+        if type(exc).__name__ in _FATAL:
+            print(f"Jev rejected the API key ({type(exc).__name__}). Check it with `autojev.py doctor --verify`.",
+                  file=sys.stderr)
+            return 2
+        raise
     return 0
 
 

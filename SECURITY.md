@@ -18,6 +18,7 @@ a command you configure when files change. These are the surfaces to scrutinise:
 |---|---|
 | **Generated code** | Text from `spec.json` (titles, rationales, descriptions, comments) cannot become executable code. Names that are used as identifiers are validated. |
 | **MCP server** | Cannot start the watcher or run a caller-supplied command. Writes only under `decision_engines/<slug>/` of the project root. Slugs outside `[a-z0-9-]` are rejected. |
+| **Jev API key** | Never printed, logged, or written to a receipt. `doctor` reports status and source only. `setup` takes the key from a hidden prompt or stdin (never an argument), writes `.env` with mode 600, and adds `.env` to `.gitignore`. No MCP tool accepts the key. |
 | **Watcher** | Never reads `.env*`, `.git`, or dependency folders. Verifies a pid is its own before signalling it. Kills a handler's whole process group on timeout or stop. |
 | **Handler mode** | The command is supplied by the operator and never built from model or project text. A change is acknowledged only with a matching receipt. |
 | **Recalibration** | Edits only through the spec, backs up and rolls back on failure, proposes rather than applies a change of design. Treats file contents as data. |

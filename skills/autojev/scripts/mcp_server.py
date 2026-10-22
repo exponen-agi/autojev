@@ -8,9 +8,10 @@ It exposes the same operations as `autojev.py` (inventory, validate, build, chec
 status, stop) plus the playbook and references, so an agent with no skill system can still
 follow the workflow: read `autojev_playbook`, then call the tools.
 
-Deliberately NOT exposed: starting the watcher, or running any caller-supplied command. Those
-belong to the person or harness operating the agent (`autojev.py watch run ...`), not to a
-tool call a prompt-injected project file could steer.
+Deliberately NOT exposed: starting the watcher, running any caller-supplied command, or saving an
+API key. The first two belong to the person or harness operating the agent. A `setup` tool would
+make the secret travel through the model and the transcript, so the user runs
+`autojev.py setup` themselves; `autojev_doctor` only reports whether a key exists.
 
 Standard library only; implements the small part of MCP that tools need (initialize, ping,
 tools/list, tools/call) over newline-delimited JSON-RPC.
@@ -21,6 +22,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -30,6 +32,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import autojev  # noqa: E402
+import keys  # noqa: E402
 import scaffold  # noqa: E402
 import scan_context  # noqa: E402
 import stop as stop_mod  # noqa: E402
@@ -158,6 +161,26 @@ def t_stop(args):
     return text
 
 
+def t_doctor(args):
+    argv = ["doctor", "--root", str(_root(args))] + (["--verify"] if args.get("verify") else [])
+    code, text = _captured(keys.main, argv)
+    return f"exit {code}\n{text}"
+
+
+def t_verify(args):
+    out = _engine_dir(_root(args), _slug(args))
+    if not (out / "engine.py").is_file():
+        raise ValueError(f"no engine {args['slug']!r} under decision_engines/")
+    cmd = [sys.executable, str(out / "engine.py"), "--verify"]
+    if args.get("min_agreement") is not None:
+        cmd += ["--min-agreement", str(float(args["min_agreement"]))]
+    try:
+        done = subprocess.run(cmd, cwd=out, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        raise ValueError("live verification timed out after 15 minutes")
+    return f"exit {done.returncode}\n{(done.stdout + done.stderr)[-6000:]}"
+
+
 TOOLS = {
     "autojev_playbook": (t_playbook, "The full AutoJEV workflow to follow: read the project, frame the decision, rank designs, "
         "show the alternatives, write the spec, build, evaluate, report. Read this first.", {}),
@@ -175,6 +198,13 @@ TOOLS = {
         {"spec": SPEC_PROP, "root": ROOT_PROP}),
     "autojev_check_engine": (t_check, "Re-run the checks and tests on an existing engine.",
         {"slug": SLUG_PROP, "root": ROOT_PROP}),
+    "autojev_doctor": (t_doctor, "Is a Jev API key available (environment or the project's .env), and with verify=true "
+        "does Jev accept it? Reports status and source only: never the key. If it is missing, ask the user to run "
+        "`autojev.py setup` themselves; never ask them to paste the key into this conversation.",
+        {"root": ROOT_PROP, "verify": {"type": "boolean"}}),
+    "autojev_verify_engine": (t_verify, "Run an engine's samples through LIVE Jev in parallel and write verification.json. "
+        "Needs a key. Makes real API calls (a few tokens each). Disagreements are information: never edit an expectation just to pass.",
+        {"slug": SLUG_PROP, "root": ROOT_PROP, "min_agreement": {"type": "number"}}),
     "autojev_snapshot": (t_snapshot, "Save the context baseline the watcher compares against.", {"root": ROOT_PROP}),
     "autojev_watch_status": (t_watch_status, "Is the background watcher running, and are changes pending?", {"root": ROOT_PROP}),
     "autojev_read_changes": (t_read_changes, "The pending context changes the watcher recorded (.autojev/changes.json).",
