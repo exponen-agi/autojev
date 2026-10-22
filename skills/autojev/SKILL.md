@@ -8,6 +8,8 @@ argument-hint: "<the decision you want to make, in plain words>"
 
 The request: **$ARGUMENTS**
 
+(If this text still says `$ARGUMENTS`, no request was substituted: the request is whatever the user asked for in conversation.)
+
 Your job is a *meta-decision* first and code second: decide what kind of decision engine this
 problem needs, show your reasoning, and only then build it. The user may not know whether their
 problem is a Boolean, a multiple choice, a spectrum or a pipeline. That is exactly what you are for.
@@ -17,7 +19,16 @@ Read before you design:
 - `references/jev-api.md` — the only Jev API facts you may rely on
 - `references/spec-schema.md` — the spec you will write; copy the nearest file in `examples/`
 
-Paths below use `${CLAUDE_SKILL_DIR}`, the directory this SKILL.md lives in. Scripts are in `${CLAUDE_SKILL_DIR}/scripts/`.
+Every operation is one command. Define, once:
+
+```bash
+AUTOJEV="python <directory containing this SKILL.md>/scripts/autojev.py"   # Claude Code: ${CLAUDE_SKILL_DIR}
+```
+
+`$AUTOJEV --help` lists the commands. Python 3.10+, standard library only. If your agent has
+**no shell**, the same operations exist as MCP tools (`scripts/mcp_server.py`; start with
+`autojev_playbook`) and everything below applies unchanged. Reference files and examples are in
+this skill's folder (`references/`, `examples/`), or via `$AUTOJEV ref NAME` / `$AUTOJEV example NAME`.
 
 ## Ground rules
 
@@ -38,7 +49,7 @@ Paths below use `${CLAUDE_SKILL_DIR}`, the directory this SKILL.md lives in. Scr
 ## Step 1 — Read the project
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/scripts/scan_context.py inventory
+$AUTOJEV scan
 ```
 
 Then read what matters: README and docs first, then policies, rules, runbooks, sample or
@@ -63,7 +74,7 @@ Extract, and keep as a working frame (write it to `.autojev/frame.md`):
 
 For each gap in the frame, ask yourself: *would a different answer change which design wins, or a
 threshold materially?* If not, make an assumption and record it. If yes, ask — once, in a single
-`AskUserQuestion` call, at most three questions, each with your recommended answer first.
+message (Claude Code: one `AskUserQuestion` call), at most three questions, each with your recommended answer first.
 
 Good questions: reversibility of the action, whether a human reviewer exists, whether labelled
 history exists, whether the options are mutually exclusive. Bad questions: anything the project
@@ -89,7 +100,7 @@ so proceed with it — do not wait for approval, but make the reasoning impossib
 
 ## Step 4 — Write the spec
 
-Copy the nearest example from `${CLAUDE_SKILL_DIR}/examples/` to `decision_engines/<slug>/spec.json` and edit it.
+Copy the nearest example from `examples/` to `decision_engines/<slug>/spec.json` and edit it.
 Disciplines that matter more than anything else here:
 
 - **One judgment per question**, worded positively and literally, naming the part of the state it
@@ -109,7 +120,7 @@ Disciplines that matter more than anything else here:
 ## Step 5 — Build, lint, test
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/scripts/scaffold.py build decision_engines/<slug>/spec.json --out decision_engines/<slug>
+$AUTOJEV build decision_engines/<slug>/spec.json --out decision_engines/<slug>
 ```
 
 This validates the spec, renders `engine.py`, replays every sample through the real policy and runs
@@ -142,26 +153,42 @@ the live answers compare with the fixtures. Do not claim that without running it
 
 ## Step 7 — Start the background watcher
 
-So the engine keeps tracking the project as context grows:
+So the engine keeps tracking the project as context grows. Save the baseline first:
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/scripts/scan_context.py snapshot
+$AUTOJEV snapshot
 ```
 
-then, using the shell tool's **background mode**:
+The watcher costs nothing while the project is quiet (it hashes files; no model calls). Only one
+runs per project. Pick the mode that matches what you can do:
+
+**A. Your harness wakes you when a background process exits** (Claude Code does). Run it in the
+shell tool's background mode:
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/scripts/watch.py run
+$AUTOJEV watch run
 ```
 
-It costs nothing while the project is quiet. When context files change and settle, it exits with an
-`AUTOJEV_CHANGE` line and writes `.autojev/changes.json`; that exit wakes this session. Only one
-watcher runs per project (`AUTOJEV_WATCHER_ALREADY_RUNNING` means one already is — leave it).
+It exits with `AUTOJEV_CHANGE` when files change and settle, and that exit wakes you.
+
+**B. Your harness cannot be woken, but an agent can be invoked headlessly** (a CLI in
+non-interactive mode, or a script calling an SDK). Start the watcher detached in handler mode; it
+stays up and runs your command after every settled change, with `AUTOJEV_ROOT` and
+`AUTOJEV_CHANGES` set. Exit 0 acknowledges:
+
+```bash
+nohup $AUTOJEV watch run --on-change "<command that runs an agent on references/recalibrator.md>" > .autojev/watcher.log 2>&1 &
+```
+
+The command is the user's to choose; do not invent one or put anything model- or
+project-supplied in it. `docs/portability.md` has working shapes for common CLIs and SDKs. If
+you do not know which agent command is right for this user, ask, or use C.
+
+**C. Neither.** Say so plainly: the engine is built and will not update itself. Tell the user to
+re-run the request (or the recalibration procedure in `references/recalibrator.md`) when the
+project changes. Do not pretend a loop exists.
 
 If the project is a git repo and `.autojev/` is not already ignored, add it to `.gitignore` and tell the user.
-
-If background execution is not available here, say so and tell the user to re-run `/autojev` to
-recalibrate on demand. Do not pretend a loop exists.
 
 ## Step 8 — Report
 
@@ -171,7 +198,8 @@ Keep it short and concrete:
 2. **The alternatives table** (from Step 3) and what would flip it.
 3. **What was built**: path, and the exact commands to run it (`--demo` offline; live with a key).
 4. **Findings**: lint warnings, assumptions, open questions, uncalibrated thresholds.
-5. **The watcher**: running or not, and how to stop it (`/autojev-stop`).
+5. **The watcher**: which mode (A, B or C), running or not, and how to stop it
+   (`/autojev-stop`, or `$AUTOJEV stop`).
 6. **What it needs from the user next**, if anything.
 
 Do not paste the engine into chat; link the paths.
@@ -183,8 +211,8 @@ Do not paste the engine into chat; link the paths.
 quickly against the new facts, edit `spec.json`, rebuild, and append a `revisions` entry saying what
 changed and why. If the winner changed, say so plainly and show the new table.
 
-**When the background watcher exits, read its last line and act on it. Only the first row means
-"something changed":**
+**Mode A (you are woken): when the background watcher exits, read its last line and act on it.
+Only the first row means "something changed":**
 
 | Last line | Do |
 |---|---|
@@ -197,13 +225,19 @@ Recalibrating on `AUTOJEV_CHANGE`:
 
 1. Read `.autojev/changes.json`. If it does not exist, another session already handled this change
    and acknowledged it: stop here.
-2. Delegate to the `autojev-recalibrator` sub-agent, naming the engine slug(s) to check. It is the
-   only writer of `spec.json` on this path; do not re-derive or edit the spec yourself.
-3. Relay its report in a few lines, and **always** surface a proposed shape change to the user
-   rather than applying it.
-4. `python ${CLAUDE_SKILL_DIR}/scripts/watch.py ack`, then start the watcher again in the background.
+2. Hand the work to the recalibrator and relay its report. Claude Code: delegate to the
+   `autojev-recalibrator` sub-agent. Anywhere else: follow `references/recalibrator.md` yourself,
+   or in a fresh context if your harness has one. Whoever does it is the only writer of `spec.json`
+   on this path; do not also edit the spec.
+3. **Always** surface a proposed shape change to the user rather than applying it.
+4. `$AUTOJEV watch ack`, then start the watcher again in the background.
+
+**Mode B (handler):** the handler command *is* step 2: it runs an agent on
+`references/recalibrator.md`, and the watcher acknowledges on exit 0 and keeps running. Nothing
+else to do except tell the user, next time they are here, what changed (read the engines'
+`revisions` and any `PROPOSED_CHANGE.md`).
 
 ## Stopping
 
-`/autojev-stop` ends the watcher and deletes `.autojev/`. The engines under `decision_engines/`
-are kept and run on their own.
+`/autojev-stop` (or `$AUTOJEV stop`) ends the watcher and deletes `.autojev/`. The engines under
+`decision_engines/` are kept and run on their own.

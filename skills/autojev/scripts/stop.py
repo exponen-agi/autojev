@@ -26,7 +26,7 @@ def _is_our_watcher(pid: int) -> bool:
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
     except OSError:
         return os.name != "posix" or not Path("/proc").exists()  # no /proc: trust the pid file
-    return "watch.py" in cmdline
+    return "watch.py" in cmdline or ("autojev.py" in cmdline and " watch" in cmdline)
 
 
 def _alive(pid: int) -> bool:

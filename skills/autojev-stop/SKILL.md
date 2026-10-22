@@ -6,18 +6,20 @@ disable-model-invocation: true
 
 # AutoJEV stop
 
+(Not on Claude Code? Run `python <autojev skill dir>/scripts/autojev.py stop`. This skill is that one command plus a short report. It needs the `autojev` skill installed beside it.)
+
 Ends continuous recalibration for this project. The decision engines stay.
 
 1. Preview first, so the report is accurate:
 
    ```bash
-   python ${CLAUDE_SKILL_DIR}/scripts/stop.py --dry-run
+   python ${CLAUDE_SKILL_DIR}/../autojev/scripts/autojev.py stop --dry-run
    ```
 
 2. Run it:
 
    ```bash
-   python ${CLAUDE_SKILL_DIR}/scripts/stop.py
+   python ${CLAUDE_SKILL_DIR}/../autojev/scripts/autojev.py stop
    ```
 
    It signals the watcher (only after confirming the pid really is an AutoJEV watcher, so a

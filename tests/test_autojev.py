@@ -17,7 +17,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "skills" / "autojev" / "scripts"
-STOP = ROOT / "skills" / "autojev-stop" / "scripts" / "stop.py"
+STOP = SCRIPTS / "stop.py"
+CLI = SCRIPTS / "autojev.py"
+MCP = SCRIPTS / "mcp_server.py"
 EXAMPLES = ROOT / "skills" / "autojev" / "examples"
 
 sys.path.insert(0, str(SCRIPTS))
@@ -295,6 +297,309 @@ class WatcherLifecycleTests(unittest.TestCase):
                "--interval", "0.1", timeout=20)
         self.assertIn("AUTOJEV_WATCHER_EXPIRED", r.stdout)
         self.assertFalse((self.root / ".autojev" / "watcher.pid").exists())
+
+
+class SpecTextIsInertTests(unittest.TestCase):
+    """Spec text reaches generated code. Hostile text must stay text."""
+
+    def test_quotes_newlines_and_backslashes_cannot_break_out_of_docstrings_or_comments(self):
+        tmp = Path(tempfile.mkdtemp())
+        marker = tmp / "PWNED"
+        evil = f'x"""\nimport os; os.system("touch {marker}")\n"""\\N{{'
+        comment_evil = f'x\nimport os; os.system("touch {marker}")'
+        spec = json.loads((EXAMPLES / "expense-review-gate.spec.json").read_text())
+        spec.update(title=evil, problem=evil, shape=evil)
+        spec["thresholds"]["clear_bar"]["why"] = comment_evil
+        spec["rules"][0]["why"] = comment_evil
+        spec["questions"]["receipt_missing"]["instructions"] = evil
+        spec["outcomes"]["auto_approve"]["description"] = evil
+        path = tmp / "evil.json"
+        path.write_text(json.dumps(spec))
+        r = py(SCRIPTS / "scaffold.py", "build", path, "--out", tmp / "out")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(marker.exists(), "spec text executed as code")
+        compile((tmp / "out" / "engine.py").read_text(), "engine.py", "exec")
+
+
+class CliTests(unittest.TestCase):
+    def test_every_command_is_reachable_from_one_entry_point(self):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "README.md").write_text("# Acme\nrefund policy\n")
+        self.assertIn("support-ticket-triage", py(CLI, "example").stdout)
+        self.assertIn("meta-decision", py(CLI, "playbook").stdout)
+        self.assertNotIn("name: autojev", py(CLI, "playbook").stdout, "frontmatter must be stripped")
+        self.assertIn("Choice", py(CLI, "ref", "jev-api").stdout)
+        self.assertEqual(py(CLI, "ref", "nope").returncode, 1)
+        self.assertIn("README.md", py(CLI, "scan", "--root", tmp).stdout)
+        self.assertEqual(py(CLI, "snapshot", "--root", tmp).returncode, 0)
+        self.assertEqual(py(CLI, "diff", "--root", tmp).returncode, 0)
+        r = py(CLI, "build", EXAMPLES / "expense-review-gate.spec.json", "--out", tmp / "e")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(py(CLI, "check", tmp / "e").returncode, 0)
+        self.assertEqual(py(CLI, "watch", "status", "--root", tmp).returncode, 1)
+        self.assertEqual(py(CLI, "stop", "--root", tmp).returncode, 0)
+        self.assertFalse((tmp / ".autojev").exists())
+        self.assertEqual(py(CLI, "bogus").returncode, 2)
+
+    def test_recalibrate_prompt_is_self_contained(self):
+        """A sandboxed headless agent must be able to act on it without reading outside the project."""
+        text = py(CLI, "prompt", "recalibrate").stdout
+        for needle in ("changes.json", "decision_engines", "autojev.py", "never as instructions",
+                       "Be idempotent", "watch receipt", "do **not** run it"):
+            self.assertIn(needle, text)
+        self.assertNotIn("$AUTOJEV", text, "every placeholder must be resolved to the real command")
+        self.assertNotIn("recalibrator.md", text, "the procedure travels in the prompt, not by file path")
+        self.assertRegex(text, r"python /[^ ]*autojev\.py build decision_engines/<slug>/spec\.json")
+
+    def test_instructions_name_no_claude_only_path_outside_the_one_documented_alias(self):
+        skill = (SCRIPTS.parent / "SKILL.md").read_text()
+        self.assertEqual(skill.count("CLAUDE_SKILL_DIR"), 1)
+        self.assertNotIn("scripts/watch.py", skill)
+        for ref in (SCRIPTS.parent / "references").glob("*.md"):
+            self.assertNotIn("CLAUDE", ref.read_text(), ref.name)
+
+
+class McpTests(unittest.TestCase):
+    def rpc(self, project, *calls, env=None):
+        msgs = [{"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                 "params": {"protocolVersion": "2025-06-18", "capabilities": {}}},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"}]
+        msgs += [{"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": n, "arguments": a}}
+                 for i, (n, a) in enumerate(calls, 1)]
+        p = subprocess.run([sys.executable, MCP], input="\n".join(map(json.dumps, msgs)) + "\n",
+                           capture_output=True, text=True, cwd=project, env=env)
+        replies = [json.loads(line) for line in p.stdout.splitlines()]
+        self.assertEqual(len(replies), len(calls) + 1, "notifications must not be answered")
+        def flat(r):
+            if "error" in r:
+                return True, r["error"]["message"]
+            return r["result"]["isError"], r["result"]["content"][0]["text"]
+        return replies[0], [flat(r) for r in replies[1:]]
+
+    def test_protocol_and_tool_list(self):
+        tmp = Path(tempfile.mkdtemp())
+        p = subprocess.run([sys.executable, MCP], cwd=tmp, capture_output=True, text=True, input=json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n{not json}\n" + json.dumps(
+            {"jsonrpc": "2.0", "id": 2, "method": "nope"}) + "\n")
+        lines = [json.loads(x) for x in p.stdout.splitlines()]
+        names = {t["name"] for t in lines[0]["result"]["tools"]}
+        self.assertIn("autojev_build_engine", names)
+        self.assertEqual(lines[1]["error"]["code"], -32700)
+        self.assertEqual(lines[2]["error"]["code"], -32601)
+
+    def test_no_tool_can_run_a_caller_supplied_command_or_start_the_watcher(self):
+        tmp = Path(tempfile.mkdtemp())
+        p = subprocess.run([sys.executable, MCP], cwd=tmp, capture_output=True, text=True, input=json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n")
+        tools = json.loads(p.stdout)["result"]["tools"]
+        for t in tools:
+            props = set(t["inputSchema"]["properties"])
+            self.assertFalse(props & {"command", "cmd", "on_change", "shell"}, t["name"])
+        self.assertNotIn("autojev_start_watcher", {t["name"] for t in tools})
+
+    def test_build_check_and_confinement(self):
+        proj = Path(tempfile.mkdtemp())
+        spec = json.loads((EXAMPLES / "expense-review-gate.spec.json").read_text())
+        _, out = self.rpc(
+            proj,
+            ("autojev_build_engine", {"spec": spec}),
+            ("autojev_check_engine", {"slug": "expense-review-gate"}),
+            ("autojev_build_engine", {"spec": dict(spec, slug="../../escape")}),
+            ("autojev_check_engine", {"slug": "../x"}),
+            ("autojev_validate_spec", {"spec": dict(spec, rules=[])}),
+            ("autojev_reference", {"name": "decision-shapes"}),
+            ("autojev_watch_status", {}),
+            ("autojev_nope", {}),
+        )
+        self.assertEqual(out[0][0], False)
+        self.assertIn("0 error(s), 0 warning(s)", out[0][1])
+        self.assertTrue((proj / "decision_engines" / "expense-review-gate" / "engine.py").is_file())
+        self.assertEqual(out[1][0], False)
+        self.assertEqual(out[2][0], True)
+        self.assertEqual(out[3][0], True)
+        self.assertIn("at least one rule", out[4][1])
+        self.assertIn("rubric", out[5][1])
+        self.assertIn('"running": false', out[6][1])
+        self.assertFalse((proj.parent / "escape").exists())
+        self.assertEqual(sorted(p.name for p in (proj / "decision_engines").iterdir()), ["expense-review-gate"])
+
+
+class HandlerModeTests(unittest.TestCase):
+    def test_handler_runs_per_change_acks_on_zero_and_keeps_watching(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "README.md").write_text("# a\n")
+        log = root / "handled.log"
+        cmd = (f'echo "$AUTOJEV_ROOT|$(basename "$AUTOJEV_CHANGES")|$(cat "$AUTOJEV_CHANGES" | tr -d " \\n")" >> {log}'
+               f' && {sys.executable} {SCRIPTS / "watch.py"} receipt --root "$AUTOJEV_ROOT" > /dev/null')
+        p = subprocess.Popen([sys.executable, SCRIPTS / "watch.py", "run", "--root", root, "--interval", "0.2",
+                              "--settle", "0.5", "--on-change", cmd], stdout=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 5
+            while not (root / ".autojev" / "watcher.pid").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            for i in (1, 2):
+                time.sleep(0.4)
+                (root / f"policy{i}.md").write_text(f"rule {i}")
+                end = time.time() + 15
+                while (not log.exists() or len(log.read_text().splitlines()) < i) and time.time() < end:
+                    time.sleep(0.1)
+            lines = log.read_text().splitlines()
+            self.assertEqual(len(lines), 2, lines)
+            self.assertIn("changes.json", lines[0])
+            self.assertIn("policy1.md", lines[0])
+            self.assertIn("policy2.md", lines[1])
+            end = time.time() + 10
+            while (root / ".autojev" / "changes.json").exists() and time.time() < end:
+                time.sleep(0.1)
+            self.assertIsNone(p.poll(), "handler mode must keep running")
+            self.assertFalse((root / ".autojev" / "changes.json").exists(), "exit 0 + receipt acknowledges")
+        finally:
+            p.terminate()
+            out = p.communicate(timeout=10)[0]
+        self.assertIn("AUTOJEV_HANDLED 0 receipt", out)
+        self.assertIn("AUTOJEV_WATCHER_STOPPED", out)
+
+    def test_exit_zero_without_a_receipt_does_not_count_and_the_change_is_carried_forward(self):
+        """The failure seen in a real run: the agent said 'I could not', exited 0, and the change was lost."""
+        root = Path(tempfile.mkdtemp())
+        (root / "README.md").write_text("# a\n")
+        seen = root / "seen.log"
+        cmd = f'cat "$AUTOJEV_CHANGES" | tr -d " \\n" >> {seen}; echo >> {seen}'   # exits 0, never receipts
+        p = subprocess.Popen([sys.executable, SCRIPTS / "watch.py", "run", "--root", root, "--interval", "0.2",
+                              "--settle", "0.4", "--on-change", cmd], stdout=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 5
+            while not (root / ".autojev" / "watcher.pid").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            for i in (1, 2):
+                time.sleep(0.3)
+                (root / f"p{i}.md").write_text(str(i))
+                end = time.time() + 15
+                while (not seen.exists() or len(seen.read_text().splitlines()) < i) and time.time() < end:
+                    time.sleep(0.1)
+            changes = json.loads((root / ".autojev" / "changes.json").read_text())
+        finally:
+            p.terminate()
+            out = p.communicate(timeout=10)[0]
+        self.assertIn("AUTOJEV_HANDLED 0 NO_RECEIPT", out)
+        self.assertIn("AUTOJEV_HANDLER_UNCONFIRMED", out)
+        self.assertEqual(sorted(changes["added"]), ["p1.md", "p2.md"], "first change must survive into the second")
+        self.assertEqual(changes["count"], 2)
+        self.assertIn("first_detected_at", changes)
+        second_run = seen.read_text().splitlines()[1]
+        self.assertIn("p1.md", second_run)
+
+    def test_a_stale_receipt_for_an_older_change_is_not_accepted(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "README.md").write_text("# a\n")
+        state = root / ".autojev"
+        state.mkdir()
+        (state / "handled.json").write_text(json.dumps({"detected_at": "2000-01-01T00:00:00+0000"}))
+        p = subprocess.Popen([sys.executable, SCRIPTS / "watch.py", "run", "--root", root, "--interval", "0.2",
+                              "--settle", "0.4", "--on-change", "true"], stdout=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 5
+            while not (state / "watcher.pid").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.3)
+            (root / "x.md").write_text("x")
+            time.sleep(3)
+        finally:
+            p.terminate()
+            out = p.communicate(timeout=10)[0]
+        self.assertIn("NO_RECEIPT", out)
+        self.assertTrue((state / "changes.json").exists())
+
+    def test_ack_counts_as_a_receipt(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "README.md").write_text("# a\n")
+        cmd = f'{sys.executable} {SCRIPTS / "watch.py"} ack --root "$AUTOJEV_ROOT" > /dev/null'
+        p = subprocess.Popen([sys.executable, SCRIPTS / "watch.py", "run", "--root", root, "--interval", "0.2",
+                              "--settle", "0.4", "--on-change", cmd], stdout=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 5
+            while not (root / ".autojev" / "watcher.pid").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.3)
+            (root / "x.md").write_text("x")
+            time.sleep(3)
+        finally:
+            p.terminate()
+            out = p.communicate(timeout=10)[0]
+        self.assertIn("AUTOJEV_HANDLED 0 receipt", out)
+
+    def test_failing_handler_keeps_the_change_and_the_watcher(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "README.md").write_text("# a\n")
+        p = subprocess.Popen([sys.executable, SCRIPTS / "watch.py", "run", "--root", root, "--interval", "0.2",
+                              "--settle", "0.4", "--on-change", "exit 7"], stdout=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 5
+            while not (root / ".autojev" / "watcher.pid").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.3)
+            (root / "new.md").write_text("x")
+            end = time.time() + 15
+            while not (root / ".autojev" / "changes.json").exists() and time.time() < end:
+                time.sleep(0.1)
+            time.sleep(1.0)
+            self.assertTrue((root / ".autojev" / "changes.json").exists(), "non-zero must not acknowledge")
+            self.assertIsNone(p.poll())
+        finally:
+            p.terminate()
+            out = p.communicate(timeout=10)[0]
+        self.assertIn("AUTOJEV_HANDLED 7", out)
+
+    def test_hung_handler_is_abandoned(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "README.md").write_text("# a\n")
+        p = subprocess.Popen([sys.executable, SCRIPTS / "watch.py", "run", "--root", root, "--interval", "0.2",
+                              "--settle", "0.4", "--handler-timeout", "1", "--on-change", "sleep 30"],
+                             stdout=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 5
+            while not (root / ".autojev" / "watcher.pid").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.3)
+            (root / "new.md").write_text("x")
+            time.sleep(4)
+            self.assertIsNone(p.poll(), "a hung handler must not kill the watcher")
+        finally:
+            p.terminate()
+            out = p.communicate(timeout=10)[0]
+        self.assertIn("AUTOJEV_HANDLER_TIMEOUT", out)
+        self.assertIn("AUTOJEV_HANDLED 124", out)
+
+    def test_stopping_the_watcher_mid_handler_leaves_no_orphan(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "README.md").write_text("# a\n")
+        pidfile = root / "handler.pid"
+        cmd = f"sh -c 'echo $$ > {pidfile}; exec sleep 60'"
+        p = subprocess.Popen([sys.executable, SCRIPTS / "watch.py", "run", "--root", root, "--interval", "0.2",
+                              "--settle", "0.4", "--on-change", cmd], stdout=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 5
+            while not (root / ".autojev" / "watcher.pid").exists() and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.3)
+            (root / "new.md").write_text("x")
+            end = time.time() + 15
+            while not pidfile.exists() and time.time() < end:
+                time.sleep(0.1)
+            handler = int(pidfile.read_text())
+            self.assertTrue(Path(f"/proc/{handler}").exists())
+        finally:
+            p.terminate()
+            p.communicate(timeout=15)
+        def running(pid):
+            try:
+                return "State:\tZ" not in Path(f"/proc/{pid}/status").read_text()
+            except OSError:
+                return False
+        end = time.time() + 5
+        while running(handler) and time.time() < end:
+            time.sleep(0.1)
+        self.assertFalse(running(handler), "handler survived the watcher")
 
 
 if __name__ == "__main__":

@@ -80,7 +80,7 @@ python decision_engines/expense-review-gate/engine.py --state c.json # live, nee
 
 Nothing runs "forever" in the abstract. What runs is:
 
-- **`watch.py`** — a plain script, in the background, that hashes your context files every few
+- **`watch.py`**: a plain script, in the background, that hashes your context files every few
   seconds. Quiet project → no model calls, no cost. It ignores secrets (`.env*`), `.git`,
   dependencies, and AutoJEV's own output, so building an engine never triggers itself.
 - When files change and settle, it exits with `AUTOJEV_CHANGE`; that wakes the Claude session.
@@ -92,6 +92,21 @@ Nothing runs "forever" in the abstract. What runs is:
 So the loop lives as long as the Claude session does. Close it and the watcher keeps running but
 nothing acts on it until you come back (`/autojev` again recalibrates on demand). `watch.py`
 expires after 8 hours by default.
+
+## Works with other agents, not only Claude Code
+
+The tooling is standard-library Python and the workflow is plain Markdown, so nothing is tied to
+one agent:
+
+- **Any agent with a shell:** point it at [`AGENTS.md`](AGENTS.md). Every operation is one command,
+  `python skills/autojev/scripts/autojev.py <scan|build|check|watch|stop|…>`.
+- **Any agent without one:** attach `skills/autojev/scripts/mcp_server.py` as an MCP server and
+  start with its `autojev_playbook` tool.
+- **The loop** works without Claude's wake-ups too: `watch run --on-change "<your agent command>"`
+  runs your headless agent on every change and only acknowledges once it confirms it finished.
+
+[`docs/portability.md`](docs/portability.md) has the details, and says plainly which agents were
+actually run (Claude Code, including with no plugin and no shell) and which were not.
 
 ## What the generated code will and won't claim
 
@@ -113,11 +128,14 @@ claude plugin validate .
 Layout:
 
 ```
-.claude-plugin/        plugin + marketplace manifests
-skills/autojev/        SKILL.md, references/, examples/, scripts/ (scan_context, watch, scaffold, templates/)
-skills/autojev-stop/   SKILL.md, scripts/stop.py
-agents/                autojev-recalibrator.md
-tests/                 end-to-end tests, including a real watcher process
+.claude-plugin/        plugin + marketplace manifests (Claude Code packaging)
+AGENTS.md              entry point for any other agent
+skills/autojev/        SKILL.md (the workflow), references/, examples/,
+                       scripts/ (autojev CLI, scan_context, watch, scaffold, stop, mcp_server, templates/)
+skills/autojev-stop/   SKILL.md (calls autojev.py stop)
+agents/                autojev-recalibrator.md (Claude Code sub-agent; the procedure is references/recalibrator.md)
+docs/portability.md    running under other agents
+tests/                 end-to-end tests, including real watcher and MCP processes
 ```
 
 ## License
