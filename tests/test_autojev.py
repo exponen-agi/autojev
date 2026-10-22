@@ -321,6 +321,26 @@ class SpecTextIsInertTests(unittest.TestCase):
         compile((tmp / "out" / "engine.py").read_text(), "engine.py", "exec")
 
 
+class ShowcaseTests(unittest.TestCase):
+    """showcase/ is browsable proof of what a build produces. It must not drift from the specs."""
+
+    def test_committed_showcase_matches_a_fresh_build_of_the_example_specs(self):
+        showcase = ROOT / "showcase"
+        slugs = sorted(p.name for p in showcase.iterdir() if p.is_dir())
+        self.assertEqual(slugs, sorted(p.name.removesuffix(".spec.json") for p in EXAMPLES.glob("*.spec.json")))
+        for slug in slugs:
+            with self.subTest(engine=slug):
+                out = Path(tempfile.mkdtemp()) / slug
+                r = py(SCRIPTS / "scaffold.py", "build", EXAMPLES / f"{slug}.spec.json", "--out", out)
+                self.assertEqual(r.returncode, 0, r.stdout)
+                for fresh in sorted(f for f in out.rglob("*") if f.is_file() and "__pycache__" not in f.parts):
+                    rel = fresh.relative_to(out)
+                    committed = showcase / slug / rel
+                    self.assertTrue(committed.is_file(), f"{rel} missing from showcase; rebuild it")
+                    self.assertEqual(committed.read_text(), fresh.read_text(),
+                                     f"showcase/{slug}/{rel} is stale: rebuild with autojev.py build")
+
+
 class CliTests(unittest.TestCase):
     def test_every_command_is_reachable_from_one_entry_point(self):
         tmp = Path(tempfile.mkdtemp())

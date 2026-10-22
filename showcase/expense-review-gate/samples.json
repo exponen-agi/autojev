@@ -1,0 +1,133 @@
+[
+  {
+    "id": "clean-lunch",
+    "state": {
+      "expense": {
+        "description": "Team lunch after the quarterly planning session",
+        "amount_usd": 38
+      }
+    },
+    "fixture": {
+      "personal_in_nature": {
+        "noul": 0.05
+      },
+      "policy_exception": {
+        "noul": 0.03
+      },
+      "receipt_missing": {
+        "noul": 0.02
+      }
+    },
+    "expect": "auto_approve",
+    "expect_rule": "approve_clean"
+  },
+  {
+    "id": "hotel-over-cap",
+    "state": {
+      "expense": {
+        "description": "Conference hotel, 3 nights",
+        "amount_usd": 640
+      }
+    },
+    "fixture": {
+      "personal_in_nature": {
+        "noul": 0.04
+      },
+      "policy_exception": {
+        "noul": 0.02
+      },
+      "receipt_missing": {
+        "noul": 0.03
+      }
+    },
+    "expect": "hold_for_manager",
+    "expect_rule": "hold_over_limit"
+  },
+  {
+    "id": "spa-weekend",
+    "state": {
+      "expense": {
+        "description": "Spa weekend, relaxing after the launch",
+        "amount_usd": 90
+      }
+    },
+    "fixture": {
+      "personal_in_nature": {
+        "noul": 0.88
+      },
+      "policy_exception": {
+        "noul": 0.05
+      },
+      "receipt_missing": {
+        "noul": 0.02
+      }
+    },
+    "expect": "hold_for_manager",
+    "expect_rule": "hold_personal"
+  },
+  {
+    "id": "admitted-exception",
+    "state": {
+      "expense": {
+        "description": "Client dinner; I know it is above the per-person cap",
+        "amount_usd": 120
+      }
+    },
+    "fixture": {
+      "personal_in_nature": {
+        "noul": 0.1
+      },
+      "policy_exception": {
+        "noul": 0.9
+      },
+      "receipt_missing": {
+        "noul": 0.03
+      }
+    },
+    "expect": "hold_for_manager",
+    "expect_rule": "hold_exception"
+  },
+  {
+    "id": "lost-receipt",
+    "state": {
+      "expense": {
+        "description": "Taxi to airport, receipt lost",
+        "amount_usd": 45
+      }
+    },
+    "fixture": {
+      "personal_in_nature": {
+        "noul": 0.05
+      },
+      "policy_exception": {
+        "noul": 0.1
+      },
+      "receipt_missing": {
+        "noul": 0.93
+      }
+    },
+    "expect": "hold_for_manager",
+    "expect_rule": "hold_no_receipt"
+  },
+  {
+    "id": "gray-zone",
+    "state": {
+      "expense": {
+        "description": "Coffee with a friend who may become a client",
+        "amount_usd": 25
+      }
+    },
+    "fixture": {
+      "personal_in_nature": {
+        "noul": 0.42
+      },
+      "policy_exception": {
+        "noul": 0.1
+      },
+      "receipt_missing": {
+        "noul": 0.05
+      }
+    },
+    "expect": "hold_for_manager"
+  }
+]

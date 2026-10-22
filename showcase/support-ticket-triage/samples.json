@@ -1,0 +1,266 @@
+[
+  {
+    "id": "spam-seo",
+    "state": {
+      "ticket": {
+        "subject": "Page 1 of Google GUARANTEED",
+        "messages": [
+          {
+            "from": "sender",
+            "text": "We can rank your site #1, reply for a free audit!!!"
+          }
+        ]
+      },
+      "refund_policy": "Duplicate charges are refundable."
+    },
+    "fixture": {
+      "is_spam": {
+        "noul": 0.97
+      },
+      "department": {
+        "choice": "sales",
+        "confidence": 0.6
+      },
+      "frustration": {
+        "score": 0.0
+      },
+      "urgency": {
+        "score": 0.0
+      },
+      "refund_requested": {
+        "noul": 0.01
+      },
+      "policy_supports": {
+        "noul": 0.02
+      }
+    },
+    "expect": "drop",
+    "expect_rule": "drop_spam"
+  },
+  {
+    "id": "duplicate-charge",
+    "state": {
+      "ticket": {
+        "subject": "Duplicate charge",
+        "messages": [
+          {
+            "from": "customer",
+            "text": "I was charged twice for order A-104. Please refund the duplicate."
+          }
+        ]
+      },
+      "refund_policy": "Duplicate charges are refundable."
+    },
+    "fixture": {
+      "is_spam": {
+        "noul": 0.02
+      },
+      "department": {
+        "choice": "billing",
+        "confidence": 0.96
+      },
+      "frustration": {
+        "score": 1.0
+      },
+      "urgency": {
+        "score": 1.1
+      },
+      "refund_requested": {
+        "noul": 0.97
+      },
+      "policy_supports": {
+        "noul": 0.93
+      }
+    },
+    "expect": "fast_track_refund",
+    "expect_rule": "refund_fast_track"
+  },
+  {
+    "id": "outage-furious",
+    "state": {
+      "ticket": {
+        "subject": "YOUR API IS DOWN",
+        "messages": [
+          {
+            "from": "customer",
+            "text": "Production is down for the third time this week. Fix it NOW."
+          }
+        ]
+      },
+      "refund_policy": "Duplicate charges are refundable."
+    },
+    "fixture": {
+      "is_spam": {
+        "noul": 0.01
+      },
+      "department": {
+        "choice": "technical",
+        "confidence": 0.91
+      },
+      "frustration": {
+        "score": 1.9
+      },
+      "urgency": {
+        "score": 1.9
+      },
+      "refund_requested": {
+        "noul": 0.05
+      },
+      "policy_supports": {
+        "noul": 0.1
+      }
+    },
+    "expect": "priority_queue",
+    "expect_rule": "escalate_priority"
+  },
+  {
+    "id": "pricing-question",
+    "state": {
+      "ticket": {
+        "subject": "Team plan pricing",
+        "messages": [
+          {
+            "from": "customer",
+            "text": "What does the team plan cost for 20 seats?"
+          }
+        ]
+      },
+      "refund_policy": "Duplicate charges are refundable."
+    },
+    "fixture": {
+      "is_spam": {
+        "noul": 0.03
+      },
+      "department": {
+        "choice": "sales",
+        "confidence": 0.92
+      },
+      "frustration": {
+        "score": 0.1
+      },
+      "urgency": {
+        "score": 0.2
+      },
+      "refund_requested": {
+        "noul": 0.01
+      },
+      "policy_supports": {
+        "noul": 0.02
+      }
+    },
+    "expect": "route_to_department",
+    "expect_rule": "route"
+  },
+  {
+    "id": "refund-but-policy-says-no",
+    "state": {
+      "ticket": {
+        "subject": "Refund please",
+        "messages": [
+          {
+            "from": "customer",
+            "text": "I stopped using it in March, refund the whole year."
+          }
+        ]
+      },
+      "refund_policy": "Duplicate charges are refundable."
+    },
+    "fixture": {
+      "is_spam": {
+        "noul": 0.02
+      },
+      "department": {
+        "choice": "billing",
+        "confidence": 0.9
+      },
+      "frustration": {
+        "score": 0.8
+      },
+      "urgency": {
+        "score": 0.6
+      },
+      "refund_requested": {
+        "noul": 0.95
+      },
+      "policy_supports": {
+        "noul": 0.2
+      }
+    },
+    "expect": "route_to_department",
+    "expect_rule": "route"
+  },
+  {
+    "id": "ambiguous-owner",
+    "state": {
+      "ticket": {
+        "subject": "Hi",
+        "messages": [
+          {
+            "from": "customer",
+            "text": "Something is off with my thing, can someone check?"
+          }
+        ]
+      },
+      "refund_policy": "Duplicate charges are refundable."
+    },
+    "fixture": {
+      "is_spam": {
+        "noul": 0.05
+      },
+      "department": {
+        "choice": "billing",
+        "confidence": 0.41
+      },
+      "frustration": {
+        "score": 0.5
+      },
+      "urgency": {
+        "score": 0.5
+      },
+      "refund_requested": {
+        "noul": 0.1
+      },
+      "policy_supports": {
+        "noul": 0.1
+      }
+    },
+    "expect": "human_review"
+  },
+  {
+    "id": "owner-is-other",
+    "state": {
+      "ticket": {
+        "subject": "Press enquiry",
+        "messages": [
+          {
+            "from": "customer",
+            "text": "I'm a journalist, who handles press?"
+          }
+        ]
+      },
+      "refund_policy": "Duplicate charges are refundable."
+    },
+    "fixture": {
+      "is_spam": {
+        "noul": 0.1
+      },
+      "department": {
+        "choice": "other",
+        "confidence": 0.9
+      },
+      "frustration": {
+        "score": 0.0
+      },
+      "urgency": {
+        "score": 0.3
+      },
+      "refund_requested": {
+        "noul": 0.0
+      },
+      "policy_supports": {
+        "noul": 0.0
+      }
+    },
+    "expect": "human_review"
+  }
+]

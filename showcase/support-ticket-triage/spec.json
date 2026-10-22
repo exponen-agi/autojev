@@ -1,0 +1,509 @@
+{
+ "slug": "support-ticket-triage",
+ "title": "Support ticket triage",
+ "problem": "Decide, for every inbound support message, whether to drop it, fast-track a policy-backed refund, escalate an urgent or angry customer, route it to a department, or hand it to a person.",
+ "shape": "cascade",
+ "state_fields": [
+  "ticket",
+  "refund_policy"
+ ],
+ "questions": {
+  "is_spam": {
+   "type": "noul",
+   "instructions": "The message is spam, automated, or a sales pitch aimed at us rather than a request from a customer"
+  },
+  "department": {
+   "type": "choice",
+   "instructions": "Which team should handle this message",
+   "criteria": {
+    "billing": "Payments, invoices, refunds, subscriptions",
+    "technical": "Bugs, outages, integrations, errors",
+    "sales": "Pricing, plans, upgrades, new accounts",
+    "account": "Login, permissions, security, profile changes",
+    "other": "None of the above, or cannot be determined"
+   }
+  },
+  "frustration": {
+   "type": "score",
+   "instructions": "How frustrated the customer appears",
+   "criteria": [
+    "Calm, just stating facts",
+    "Frustrated but civil",
+    "Very angry, strong language"
+   ]
+  },
+  "urgency": {
+   "type": "score",
+   "instructions": "How urgently the customer needs a resolution",
+   "criteria": [
+    "No time pressure",
+    "Wants an answer soon",
+    "Blocked right now and cannot work"
+   ]
+  },
+  "refund_requested": {
+   "type": "noul",
+   "instructions": "The customer explicitly asks for a refund or credit"
+  },
+  "policy_supports": {
+   "type": "noul",
+   "instructions": "The refund_policy in the state covers the situation the customer describes"
+  }
+ },
+ "thresholds": {
+  "spam_bar": {
+   "value": 0.85,
+   "why": "dropping a real customer is the costly error, so the bar is high"
+  },
+  "dept_floor": {
+   "value": 0.7,
+   "why": "a mis-routed ticket costs a hop, not a customer; below this a person decides"
+  },
+  "refund_bar": {
+   "value": 0.8,
+   "why": "only fast-track when the ask is explicit"
+  },
+  "policy_bar": {
+   "value": 0.85,
+   "why": "the refunds desk still issues the money, but a wrong pre-check wastes their time"
+  },
+  "priority_bar": {
+   "value": 0.7,
+   "why": "cheap to escalate; erring high only reorders the queue"
+  }
+ },
+ "composites": {
+  "priority": {
+   "weights": {
+    "frustration": 0.5,
+    "urgency": 0.5
+   },
+   "why": "weights live in code so growth can change them with a diff"
+  }
+ },
+ "outcomes": {
+  "drop": {
+   "kind": "block",
+   "description": "Discard: spam or automated mail"
+  },
+  "fast_track_refund": {
+   "kind": "auto",
+   "description": "Refunds desk, flagged as pre-checked against policy (a person still issues the money)"
+  },
+  "priority_queue": {
+   "kind": "auto",
+   "description": "Front of the queue for the best-matching department"
+  },
+  "route_to_department": {
+   "kind": "auto",
+   "description": "Normal queue for the chosen department"
+  },
+  "human_review": {
+   "kind": "review",
+   "description": "Triage lead decides: Jev was not sure enough"
+  }
+ },
+ "rules": [
+  {
+   "name": "drop_spam",
+   "then": "drop",
+   "why": "very likely not a customer",
+   "when": [
+    {
+     "q": "is_spam",
+     "field": "noul",
+     "op": ">",
+     "value": "$spam_bar"
+    }
+   ]
+  },
+  {
+   "name": "refund_fast_track",
+   "then": "fast_track_refund",
+   "why": "explicit refund ask, policy covers it, and billing is clearly the owner",
+   "when": [
+    {
+     "q": "refund_requested",
+     "field": "noul",
+     "op": ">",
+     "value": "$refund_bar"
+    },
+    {
+     "q": "policy_supports",
+     "field": "noul",
+     "op": ">",
+     "value": "$policy_bar"
+    },
+    {
+     "q": "department",
+     "field": "choice",
+     "op": "==",
+     "value": "billing"
+    },
+    {
+     "q": "department",
+     "field": "confidence",
+     "op": ">=",
+     "value": "$dept_floor"
+    }
+   ]
+  },
+  {
+   "name": "escalate_priority",
+   "then": "priority_queue",
+   "why": "angry and/or blocked customers jump the queue",
+   "when": [
+    {
+     "composite": "priority",
+     "op": ">",
+     "value": "$priority_bar"
+    }
+   ]
+  },
+  {
+   "name": "route",
+   "then": "route_to_department",
+   "why": "Jev is sure enough about the owner",
+   "when": [
+    {
+     "q": "department",
+     "field": "confidence",
+     "op": ">=",
+     "value": "$dept_floor"
+    },
+    {
+     "q": "department",
+     "field": "choice",
+     "op": "!=",
+     "value": "other"
+    }
+   ]
+  }
+ ],
+ "default": {
+  "outcome": "human_review",
+  "why": "no rule was confident enough — say so, don't guess"
+ },
+ "candidates": [
+  {
+   "name": "One Choice: action",
+   "shape": "router",
+   "scores": {
+    "fit": 1,
+    "actionability": 1,
+    "risk_fit": 1,
+    "data": 3,
+    "simplicity": 3
+   },
+   "why_for": "Smallest possible build.",
+   "why_against": "Mixes who owns it with how urgent it is; the confidence of one combined label cannot be tuned per action."
+  },
+  {
+   "name": "Independent judgments + code policy",
+   "shape": "cascade",
+   "scores": {
+    "fit": 3,
+    "actionability": 3,
+    "risk_fit": 3,
+    "data": 3,
+    "simplicity": 2
+   },
+   "why_for": "Each decision (spam, owner, anger, urgency, refund) is its own typed answer with its own bar.",
+   "why_against": "Six questions to maintain, and six bars to calibrate."
+  },
+  {
+   "name": "Score-only priority model",
+   "shape": "score",
+   "scores": {
+    "fit": 1,
+    "actionability": 1,
+    "risk_fit": 1,
+    "data": 3,
+    "simplicity": 2
+   },
+   "why_for": "A single number is easy to rank by.",
+   "why_against": "Says nothing about where a ticket should go; hides which factor drove the score."
+  }
+ ],
+ "chosen": "Independent judgments + code policy",
+ "assumptions": [
+  "Departments are billing / technical / sales / account.",
+  "A person always issues refunds; the engine only pre-checks and routes."
+ ],
+ "open_questions": [
+  "Is there a labelled history of past routings to calibrate dept_floor against?"
+ ],
+ "samples": [
+  {
+   "id": "spam-seo",
+   "state": {
+    "ticket": {
+     "subject": "Page 1 of Google GUARANTEED",
+     "messages": [
+      {
+       "from": "sender",
+       "text": "We can rank your site #1, reply for a free audit!!!"
+      }
+     ]
+    },
+    "refund_policy": "Duplicate charges are refundable."
+   },
+   "fixture": {
+    "is_spam": {
+     "noul": 0.97
+    },
+    "department": {
+     "choice": "sales",
+     "confidence": 0.6
+    },
+    "frustration": {
+     "score": 0.0
+    },
+    "urgency": {
+     "score": 0.0
+    },
+    "refund_requested": {
+     "noul": 0.01
+    },
+    "policy_supports": {
+     "noul": 0.02
+    }
+   },
+   "expect": "drop",
+   "expect_rule": "drop_spam"
+  },
+  {
+   "id": "duplicate-charge",
+   "state": {
+    "ticket": {
+     "subject": "Duplicate charge",
+     "messages": [
+      {
+       "from": "customer",
+       "text": "I was charged twice for order A-104. Please refund the duplicate."
+      }
+     ]
+    },
+    "refund_policy": "Duplicate charges are refundable."
+   },
+   "fixture": {
+    "is_spam": {
+     "noul": 0.02
+    },
+    "department": {
+     "choice": "billing",
+     "confidence": 0.96
+    },
+    "frustration": {
+     "score": 1.0
+    },
+    "urgency": {
+     "score": 1.1
+    },
+    "refund_requested": {
+     "noul": 0.97
+    },
+    "policy_supports": {
+     "noul": 0.93
+    }
+   },
+   "expect": "fast_track_refund",
+   "expect_rule": "refund_fast_track"
+  },
+  {
+   "id": "outage-furious",
+   "state": {
+    "ticket": {
+     "subject": "YOUR API IS DOWN",
+     "messages": [
+      {
+       "from": "customer",
+       "text": "Production is down for the third time this week. Fix it NOW."
+      }
+     ]
+    },
+    "refund_policy": "Duplicate charges are refundable."
+   },
+   "fixture": {
+    "is_spam": {
+     "noul": 0.01
+    },
+    "department": {
+     "choice": "technical",
+     "confidence": 0.91
+    },
+    "frustration": {
+     "score": 1.9
+    },
+    "urgency": {
+     "score": 1.9
+    },
+    "refund_requested": {
+     "noul": 0.05
+    },
+    "policy_supports": {
+     "noul": 0.1
+    }
+   },
+   "expect": "priority_queue",
+   "expect_rule": "escalate_priority"
+  },
+  {
+   "id": "pricing-question",
+   "state": {
+    "ticket": {
+     "subject": "Team plan pricing",
+     "messages": [
+      {
+       "from": "customer",
+       "text": "What does the team plan cost for 20 seats?"
+      }
+     ]
+    },
+    "refund_policy": "Duplicate charges are refundable."
+   },
+   "fixture": {
+    "is_spam": {
+     "noul": 0.03
+    },
+    "department": {
+     "choice": "sales",
+     "confidence": 0.92
+    },
+    "frustration": {
+     "score": 0.1
+    },
+    "urgency": {
+     "score": 0.2
+    },
+    "refund_requested": {
+     "noul": 0.01
+    },
+    "policy_supports": {
+     "noul": 0.02
+    }
+   },
+   "expect": "route_to_department",
+   "expect_rule": "route"
+  },
+  {
+   "id": "refund-but-policy-says-no",
+   "state": {
+    "ticket": {
+     "subject": "Refund please",
+     "messages": [
+      {
+       "from": "customer",
+       "text": "I stopped using it in March, refund the whole year."
+      }
+     ]
+    },
+    "refund_policy": "Duplicate charges are refundable."
+   },
+   "fixture": {
+    "is_spam": {
+     "noul": 0.02
+    },
+    "department": {
+     "choice": "billing",
+     "confidence": 0.9
+    },
+    "frustration": {
+     "score": 0.8
+    },
+    "urgency": {
+     "score": 0.6
+    },
+    "refund_requested": {
+     "noul": 0.95
+    },
+    "policy_supports": {
+     "noul": 0.2
+    }
+   },
+   "expect": "route_to_department",
+   "expect_rule": "route"
+  },
+  {
+   "id": "ambiguous-owner",
+   "state": {
+    "ticket": {
+     "subject": "Hi",
+     "messages": [
+      {
+       "from": "customer",
+       "text": "Something is off with my thing, can someone check?"
+      }
+     ]
+    },
+    "refund_policy": "Duplicate charges are refundable."
+   },
+   "fixture": {
+    "is_spam": {
+     "noul": 0.05
+    },
+    "department": {
+     "choice": "billing",
+     "confidence": 0.41
+    },
+    "frustration": {
+     "score": 0.5
+    },
+    "urgency": {
+     "score": 0.5
+    },
+    "refund_requested": {
+     "noul": 0.1
+    },
+    "policy_supports": {
+     "noul": 0.1
+    }
+   },
+   "expect": "human_review"
+  },
+  {
+   "id": "owner-is-other",
+   "state": {
+    "ticket": {
+     "subject": "Press enquiry",
+     "messages": [
+      {
+       "from": "customer",
+       "text": "I'm a journalist, who handles press?"
+      }
+     ]
+    },
+    "refund_policy": "Duplicate charges are refundable."
+   },
+   "fixture": {
+    "is_spam": {
+     "noul": 0.1
+    },
+    "department": {
+     "choice": "other",
+     "confidence": 0.9
+    },
+    "frustration": {
+     "score": 0.0
+    },
+    "urgency": {
+     "score": 0.3
+    },
+    "refund_requested": {
+     "noul": 0.0
+    },
+    "policy_supports": {
+     "noul": 0.0
+    }
+   },
+   "expect": "human_review"
+  }
+ ],
+ "revisions": [
+  {
+   "date": "example",
+   "change": "initial build",
+   "reason": "worked example shipped with AutoJEV"
+  }
+ ]
+}
