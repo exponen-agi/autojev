@@ -1,0 +1,4 @@
+.autojev/
+__pycache__/
+*.pyc
+.venv/

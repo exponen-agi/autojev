@@ -1,0 +1,338 @@
+{
+ "slug": "expense-review-gate",
+ "title": "Expense review gate",
+ "problem": "Decide whether an expense claim can be reimbursed automatically or must be held for a manager before any money moves.",
+ "shape": "gate",
+ "state_fields": [
+  "expense"
+ ],
+ "questions": {
+  "personal_in_nature": {
+   "type": "noul",
+   "instructions": "The expense looks personal rather than business-related"
+  },
+  "policy_exception": {
+   "type": "noul",
+   "instructions": "The description asks for, or admits to, an exception to the expense policy"
+  },
+  "receipt_missing": {
+   "type": "noul",
+   "instructions": "The claim says a receipt is missing, lost, or unavailable"
+  }
+ },
+ "thresholds": {
+  "auto_limit_usd": {
+   "value": 200,
+   "why": "hard cap in code: arithmetic on the amount never goes to the model"
+  },
+  "personal_bar": {
+   "value": 0.6,
+   "why": "personal spend is a policy breach, hold early"
+  },
+  "exception_bar": {
+   "value": 0.5,
+   "why": "an admitted exception always needs a human"
+  },
+  "receipt_bar": {
+   "value": 0.7,
+   "why": "auditors need the receipt, but a mistaken hold is only a delay"
+  },
+  "clear_bar": {
+   "value": 0.25,
+   "why": "auto-approve only when every flag is clearly absent; the gray zone goes to a person"
+  }
+ },
+ "outcomes": {
+  "auto_approve": {
+   "kind": "auto",
+   "description": "Reimburse without a manager"
+  },
+  "hold_for_manager": {
+   "kind": "review",
+   "description": "Hold; a manager approves or rejects"
+  }
+ },
+ "rules": [
+  {
+   "name": "hold_over_limit",
+   "then": "hold_for_manager",
+   "why": "amount is checked in code",
+   "when": [
+    {
+     "state": "expense.amount_usd",
+     "op": ">",
+     "value": "$auto_limit_usd"
+    }
+   ]
+  },
+  {
+   "name": "hold_personal",
+   "then": "hold_for_manager",
+   "why": "looks personal",
+   "when": [
+    {
+     "q": "personal_in_nature",
+     "field": "noul",
+     "op": ">",
+     "value": "$personal_bar"
+    }
+   ]
+  },
+  {
+   "name": "hold_exception",
+   "then": "hold_for_manager",
+   "why": "policy exception requested",
+   "when": [
+    {
+     "q": "policy_exception",
+     "field": "noul",
+     "op": ">",
+     "value": "$exception_bar"
+    }
+   ]
+  },
+  {
+   "name": "hold_no_receipt",
+   "then": "hold_for_manager",
+   "why": "no receipt",
+   "when": [
+    {
+     "q": "receipt_missing",
+     "field": "noul",
+     "op": ">",
+     "value": "$receipt_bar"
+    }
+   ]
+  },
+  {
+   "name": "approve_clean",
+   "then": "auto_approve",
+   "why": "every flag clearly absent, under the cap",
+   "when": [
+    {
+     "q": "personal_in_nature",
+     "field": "noul",
+     "op": "<",
+     "value": "$clear_bar"
+    },
+    {
+     "q": "policy_exception",
+     "field": "noul",
+     "op": "<",
+     "value": "$clear_bar"
+    },
+    {
+     "q": "receipt_missing",
+     "field": "noul",
+     "op": "<",
+     "value": "$clear_bar"
+    }
+   ]
+  }
+ ],
+ "default": {
+  "outcome": "hold_for_manager",
+  "why": "gray zone: not clearly bad, not clearly clean"
+ },
+ "candidates": [
+  {
+   "name": "One Noul: needs_review",
+   "shape": "gate",
+   "scores": {
+    "fit": 2,
+    "actionability": 1,
+    "risk_fit": 1,
+    "data": 3,
+    "simplicity": 3
+   },
+   "why_for": "One question, one threshold.",
+   "why_against": "Hides three different reasons in one number; you cannot tune 'receipt' without moving 'personal'."
+  },
+  {
+   "name": "Independent Noul flags + code limit",
+   "shape": "gate",
+   "scores": {
+    "fit": 3,
+    "actionability": 3,
+    "risk_fit": 3,
+    "data": 3,
+    "simplicity": 2
+   },
+   "why_for": "Boolean is the right answer shape: each flag is true or false and the probability is the signal.",
+   "why_against": "Three bars to calibrate instead of one."
+  },
+  {
+   "name": "Choice: approve / hold / reject",
+   "shape": "router",
+   "scores": {
+    "fit": 2,
+    "actionability": 2,
+    "risk_fit": 1,
+    "data": 3,
+    "simplicity": 3
+   },
+   "why_for": "Mirrors the final workflow.",
+   "why_against": "A Choice is relative: it can be confident about a wrong winner, and a Noul-tuned bar does not carry over."
+  },
+  {
+   "name": "Score: risk 0-4",
+   "shape": "score",
+   "scores": {
+    "fit": 1,
+    "actionability": 1,
+    "risk_fit": 2,
+    "data": 3,
+    "simplicity": 3
+   },
+   "why_for": "Gives a rankable number.",
+   "why_against": "Nothing here is an ordered spectrum; the ordering is invented."
+  }
+ ],
+ "chosen": "Independent Noul flags + code limit",
+ "assumptions": [
+  "Manager review is available for every held claim."
+ ],
+ "open_questions": [
+  "Does the business want to reject obvious personal spend outright instead of holding it?"
+ ],
+ "samples": [
+  {
+   "id": "clean-lunch",
+   "state": {
+    "expense": {
+     "description": "Team lunch after the quarterly planning session",
+     "amount_usd": 38
+    }
+   },
+   "fixture": {
+    "personal_in_nature": {
+     "noul": 0.05
+    },
+    "policy_exception": {
+     "noul": 0.03
+    },
+    "receipt_missing": {
+     "noul": 0.02
+    }
+   },
+   "expect": "auto_approve",
+   "expect_rule": "approve_clean"
+  },
+  {
+   "id": "hotel-over-cap",
+   "state": {
+    "expense": {
+     "description": "Conference hotel, 3 nights",
+     "amount_usd": 640
+    }
+   },
+   "fixture": {
+    "personal_in_nature": {
+     "noul": 0.04
+    },
+    "policy_exception": {
+     "noul": 0.02
+    },
+    "receipt_missing": {
+     "noul": 0.03
+    }
+   },
+   "expect": "hold_for_manager",
+   "expect_rule": "hold_over_limit"
+  },
+  {
+   "id": "spa-weekend",
+   "state": {
+    "expense": {
+     "description": "Spa weekend, relaxing after the launch",
+     "amount_usd": 90
+    }
+   },
+   "fixture": {
+    "personal_in_nature": {
+     "noul": 0.88
+    },
+    "policy_exception": {
+     "noul": 0.05
+    },
+    "receipt_missing": {
+     "noul": 0.02
+    }
+   },
+   "expect": "hold_for_manager",
+   "expect_rule": "hold_personal"
+  },
+  {
+   "id": "admitted-exception",
+   "state": {
+    "expense": {
+     "description": "Client dinner; I know it is above the per-person cap",
+     "amount_usd": 120
+    }
+   },
+   "fixture": {
+    "personal_in_nature": {
+     "noul": 0.1
+    },
+    "policy_exception": {
+     "noul": 0.9
+    },
+    "receipt_missing": {
+     "noul": 0.03
+    }
+   },
+   "expect": "hold_for_manager",
+   "expect_rule": "hold_exception"
+  },
+  {
+   "id": "lost-receipt",
+   "state": {
+    "expense": {
+     "description": "Taxi to airport, receipt lost",
+     "amount_usd": 45
+    }
+   },
+   "fixture": {
+    "personal_in_nature": {
+     "noul": 0.05
+    },
+    "policy_exception": {
+     "noul": 0.1
+    },
+    "receipt_missing": {
+     "noul": 0.93
+    }
+   },
+   "expect": "hold_for_manager",
+   "expect_rule": "hold_no_receipt"
+  },
+  {
+   "id": "gray-zone",
+   "state": {
+    "expense": {
+     "description": "Coffee with a friend who may become a client",
+     "amount_usd": 25
+    }
+   },
+   "fixture": {
+    "personal_in_nature": {
+     "noul": 0.42
+    },
+    "policy_exception": {
+     "noul": 0.1
+    },
+    "receipt_missing": {
+     "noul": 0.05
+    }
+   },
+   "expect": "hold_for_manager"
+  }
+ ],
+ "revisions": [
+  {
+   "date": "example",
+   "change": "initial build",
+   "reason": "worked example shipped with AutoJEV"
+  }
+ ]
+}
