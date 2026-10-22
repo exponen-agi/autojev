@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="t d">
+  <title id="t">AutoJEV</title>
+  <desc id="d">A plain-English decision problem goes in; a choice of Boolean, multiple-choice or score shapes is weighed; a tested Jev decision engine comes out.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#1b1442"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#d63c9e"/>
+      <stop offset="1" stop-color="#7c5cff"/>
+    </linearGradient>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#8b93b8"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="360" rx="20" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="6" rx="3" fill="url(#accent)"/>
+
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+    <text x="64" y="132" font-size="76" font-weight="800" fill="#ffffff" letter-spacing="-2">Auto<tspan fill="url(#accent)">JEV</tspan></text>
+    <text x="66" y="180" font-size="26" fill="#cfd3ee">Describe a decision in plain words.</text>
+    <text x="66" y="214" font-size="26" fill="#cfd3ee">Get a tested Jev decision engine.</text>
+    <text x="66" y="262" font-size="17" fill="#8b93b8">Picks the right shape. Shows the alternatives. Keeps itself current.</text>
+    <text x="66" y="296" font-size="15" fill="#6c7499">Claude Code  ·  MCP  ·  any agent with a shell   |   Python 3.10+, no dependencies</text>
+
+    <!-- 1: the sentence -->
+    <g transform="translate(640,92)">
+      <rect width="150" height="96" rx="14" fill="#232a55" stroke="#3a4380"/>
+      <text x="75" y="30" text-anchor="middle" font-size="12" fill="#8b93b8">you write</text>
+      <rect x="18" y="42" width="114" height="7" rx="3.5" fill="#6c7499"/>
+      <rect x="18" y="58" width="86" height="7" rx="3.5" fill="#6c7499"/>
+      <rect x="18" y="74" width="100" height="7" rx="3.5" fill="#6c7499"/>
+    </g>
+    <path d="M796 140 L842 140" stroke="#8b93b8" stroke-width="2.5" marker-end="url(#arr)"/>
+
+    <!-- 2: the shapes -->
+    <g transform="translate(850,66)">
+      <rect width="150" height="148" rx="14" fill="#232a55" stroke="#3a4380"/>
+      <text x="75" y="26" text-anchor="middle" font-size="12" fill="#8b93b8">it weighs</text>
+      <g transform="translate(20,40)">
+        <rect width="110" height="28" rx="7" fill="#2c3466"/>
+        <circle cx="16" cy="14" r="6" fill="#0d9e70"/>
+        <text x="32" y="19" font-size="13" fill="#e5e8ff">yes / no</text>
+      </g>
+      <g transform="translate(20,76)">
+        <rect width="110" height="28" rx="7" fill="#2c3466"/>
+        <path d="M10 14 h12 M16 8 v12" stroke="#d63c9e" stroke-width="3" stroke-linecap="round"/>
+        <text x="32" y="19" font-size="13" fill="#e5e8ff">which one</text>
+      </g>
+      <g transform="translate(20,112)">
+        <rect width="110" height="28" rx="7" fill="#2c3466"/>
+        <path d="M8 21 v-4 M14 21 v-8 M20 21 v-12" stroke="#7c5cff" stroke-width="4" stroke-linecap="round"/>
+        <text x="32" y="19" font-size="13" fill="#e5e8ff">how much</text>
+      </g>
+    </g>
+    <path d="M1006 140 L1042 140" stroke="#8b93b8" stroke-width="2.5" marker-end="url(#arr)"/>
+
+    <!-- 3: the engine -->
+    <g transform="translate(1050,92)">
+      <rect width="104" height="96" rx="14" fill="#10372f" stroke="#0d9e70"/>
+      <text x="52" y="30" text-anchor="middle" font-size="12" fill="#7fe0c0">you get</text>
+      <text x="52" y="58" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">engine.py</text>
+      <path d="M16 76 l7 7 l14 -14" fill="none" stroke="#7fe0c0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="46" y="82" font-size="13" fill="#7fe0c0">tested</text>
+    </g>
+  </g>
+</svg>
