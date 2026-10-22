@@ -1,0 +1,12 @@
+{
+  "name": "autojev",
+  "owner": { "name": "exponen-agi" },
+  "metadata": { "description": "AutoJEV: describe a business decision, get a tested Jev decision engine." },
+  "plugins": [
+    {
+      "name": "autojev",
+      "source": "./",
+      "description": "Jev in self-service mode for business domains: describe a decision, get a tested Jev decision engine."
+    }
+  ]
+}
