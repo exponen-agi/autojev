@@ -50,7 +50,10 @@ QUESTIONS = {
         instructions='The description asks for, or admits to, an exception to the expense policy',
     ),
     'receipt_missing': Noul(
-        instructions='The claim says a receipt is missing, lost, or unavailable',
+        instructions=(
+            'The claim explicitly states that the receipt is missing, lost, or '
+            'unavailable'
+        ),
     ),
 }
 
