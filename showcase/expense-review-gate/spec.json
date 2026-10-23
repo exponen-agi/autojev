@@ -17,7 +17,7 @@
   },
   "receipt_missing": {
    "type": "noul",
-   "instructions": "The claim says a receipt is missing, lost, or unavailable"
+   "instructions": "The claim explicitly states that the receipt is missing, lost, or unavailable"
   }
  },
  "thresholds": {
