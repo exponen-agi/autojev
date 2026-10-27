@@ -76,6 +76,32 @@ conversation. Jev is in early access: [typesafe.ai](https://typesafe.ai).
 Not on Claude Code? See [Works with other agents](#works-with-other-agents). Requires Python 3.10+
 and nothing else. `typesafe-sdk` is needed only to call Jev live.
 
+### Not only Jev: other backends
+
+Live calls go to Jev by default. To answer with an LLM instead, install
+[`system-one-adapter`](https://github.com/typesafe-ai/system-one-adapter-python) (a drop-in for the Jev
+client that exposes the same `Noul` / `Choice` / `Score` questions over OpenAI, Anthropic or Gemini) and select it:
+
+```bash
+pip install 'system-one-adapter[openai]'          # or [anthropic] / [gemini]
+python skills/autojev/scripts/autojev.py setup --backend openai    # hidden prompt, saves .env; sets AUTOJEV_BACKEND
+export AUTOJEV_LLM_MODEL=<an exact model name>    # no default: model names move
+python skills/autojev/scripts/autojev.py doctor --backend openai --verify
+```
+
+| `AUTOJEV_BACKEND` | Client | Key variable |
+|---|---|---|
+| `jev` (default) | `typesafe-sdk` | `TYPESAFE_API_KEY` |
+| `openai` | `system-one-adapter` | `OPENAI_API_KEY` (`OPENAI_BASE_URL` for compatible endpoints) |
+| `anthropic` | `system-one-adapter` | `ANTHROPIC_API_KEY` |
+| `gemini` | `system-one-adapter` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+
+The engine, its rules and its tests are unchanged. What changes is who answers, and that is recorded: the
+receipt (`verification.json`), README and decision record say which backend answered, and a run on an LLM
+is reported as **not verified against Jev**. An LLM's probabilities are not Jev's, so thresholds tuned on
+one are not tuned for the other; recalibrate before switching. The key rules are the same (hidden prompt,
+`.env` mode 600, never an argument).
+
 ## How it works
 
 ```mermaid

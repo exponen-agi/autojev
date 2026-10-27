@@ -354,8 +354,8 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).parent))
 
 from jev_compat import (  # noqa: E402
-    Choice, Noul, OfflineClient, Score, MissingKey, canonical, get_async_client, get_client, have_live,
-    require_live,
+    BASE_URL_ENV, Choice, Noul, OfflineClient, Score, MissingKey, backend, canonical, get_async_client,
+    get_client, have_live, require_live,
 )
 
 HERE = Path(__file__).parent
@@ -493,7 +493,8 @@ def describe_verification(v: dict) -> str:
     r = v.get("report") or {}
     head = {
         "none": "**Not verified against live Jev.** The rules are tested offline only, with assumed answers. "
-                "Run `python engine.py --verify` with a `TYPESAFE_API_KEY`.",
+                "Run `python engine.py --verify` with a `TYPESAFE_API_KEY` (or set `AUTOJEV_BACKEND` to check the rules "
+                "against an LLM instead, which is not verification against Jev).",
         "stale": "**Stale.** `verification.json` was recorded for an older spec. Re-run `python engine.py --verify`.",
         "failed": "**Verification ran and did not pass.**",
         "passed": "**Verified against live Jev.**",
@@ -503,6 +504,11 @@ def describe_verification(v: dict) -> str:
         head = (f"**{'Passed' if v['state'] == 'passed' else 'Ran and did not pass'} against a custom endpoint** "
                 f"(`{custom}`), not the default Jev API. It may be a proxy, a mock or a stub, so treat it as a "
                 "test of plumbing, not as verification of Jev's judgment.")
+    other = r.get("backend", "jev")
+    if other != "jev" and v["state"] in ("passed", "failed"):
+        head = (f"**{'Passed' if v['state'] == 'passed' else 'Ran and did not pass'} against the `{other}` backend** "
+                f"(an LLM through system-one-adapter), **not against Jev**. It checks the rules against that model; "
+                f"thresholds tuned here are not tuned for Jev.")
     if r:
         head += (f" {r.get('agreed')}/{r.get('samples')} samples reached their expected outcome "
                  f"({r.get('agreement', 0):.0%}, needed {r.get('min_agreement', 0):.0%}) on "
@@ -577,10 +583,11 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("error", results[1])
 
 
-@unittest.skipUnless(engine.have_live(), "live verification not run: no TYPESAFE_API_KEY (or typesafe-sdk "
-                     "not installed). Offline tests above passed; nothing was verified against Jev itself.")
+@unittest.skipUnless(engine.have_live(), "live verification not run: no API key for the configured backend (or its "
+                     "client library is not installed). Offline tests above passed; nothing was verified against Jev itself.")
 class LiveTests(unittest.TestCase):
-    """Run only when a key is available: the same samples, answered by the real Jev, in parallel.
+    """Run only when a key is available: the same samples, answered by the configured backend (Jev unless
+    AUTOJEV_BACKEND says otherwise), in parallel.
 
     Set AUTOJEV_MIN_AGREEMENT to change how many must reach their expected outcome (default 0.75).
     """

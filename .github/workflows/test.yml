@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.13"]
-        sdk: [with-sdk, without-sdk]
+        sdk: [with-sdk, with-adapter, without-sdk]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,4 +20,8 @@ jobs:
       # stand-in server. Without the SDK those tests skip, and the offline paths are tested alone.
       - if: matrix.sdk == 'with-sdk'
         run: pip install typesafe-sdk
+      # The AUTOJEV_BACKEND=openai path runs the real system-one-adapter and openai SDK against a
+      # stand-in OpenAI-compatible server (tests/fake_openai.py).
+      - if: matrix.sdk == 'with-adapter'
+        run: pip install typesafe-sdk 'system-one-adapter[openai]'
       - run: python -m unittest discover -s tests -v

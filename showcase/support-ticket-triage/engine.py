@@ -31,8 +31,8 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).parent))
 
 from jev_compat import (  # noqa: E402
-    Choice, Noul, OfflineClient, Score, MissingKey, canonical, get_async_client, get_client, have_live,
-    require_live,
+    BASE_URL_ENV, Choice, Noul, OfflineClient, Score, MissingKey, backend, canonical, get_async_client,
+    get_client, have_live, require_live,
 )
 
 HERE = Path(__file__).parent
@@ -300,9 +300,9 @@ def decide_many(states, client=None, concurrency: int = 4, max_rps: float = 15.0
 
 
 def endpoint_label() -> str:
-    """Where live calls go: 'default' (the production API) or the scheme://host of an override.
+    """Where live calls go: 'default' (the provider's production API) or the scheme://host of an override.
     Only scheme, host and port are kept, so a receipt can never carry credentials from a URL."""
-    raw = os.environ.get("TYPESAFE_BASE_URL", "").strip()
+    raw = os.environ.get(BASE_URL_ENV.get(backend(), ""), "").strip()
     if not raw:
         return "default"
     parts = urlsplit(raw)
@@ -375,6 +375,7 @@ def verify(min_agreement: float = 0.75, concurrency: int = 4, max_rps: float = 1
         "verified_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "spec_sha256": spec_sha256(),
         "endpoint": endpoint_label(),
+        "backend": backend(),
         "models": sorted({r["model"] for r in results if r.get("model")}),
         "samples": len(cases), "agreed": agreed, "agreement": round(agreement, 3),
         "min_agreement": min_agreement, "errors": errors,
@@ -391,15 +392,20 @@ def verify(min_agreement: float = 0.75, concurrency: int = 4, max_rps: float = 1
 
 
 def print_verification(report: dict) -> None:
-    print(f"{'':4}{'sample':<28}{'expected':<22}{'live Jev gave':<22}")
+    live_name = "live Jev" if report.get("backend", "jev") == "jev" else f"{report['backend']} (not Jev)"
+    print(f"{'':4}{'sample':<28}{'expected':<22}{live_name + ' gave':<22}")
     for c in report["cases"]:
         mark = "ok" if c["match"] else ("ERR" if c["error"] else "!!")
         print(f"{mark:<4}{c['id']:<28}{c['expected']:<22}{(c['got'] or c['error'] or '-')[:40]:<22}")
     models = ", ".join(report["models"]) or "unknown"
     lat = report["latency_ms"]
     if report.get("endpoint", "default") != "default":
-        print(f"\nNOTE: calls went to a custom endpoint ({report['endpoint']}), not the default Jev API. "
-              "A proxy, mock or stub proves plumbing, not Jev's judgment.", end="")
+        print(f"\nNOTE: calls went to a custom endpoint ({report['endpoint']}), not the default API. "
+              "A proxy, mock or stub proves plumbing, not a model's judgment.", end="")
+    if report.get("backend", "jev") != "jev":
+        print(f"\nNOTE: answered by the {report['backend']} backend through system-one-adapter, NOT by Jev. "
+              "This checks the rules against that LLM; it says nothing about Jev, and a threshold tuned here is not "
+              "tuned for Jev.", end="")
     print(f"\n{report['agreed']}/{report['samples']} agree ({report['agreement']:.0%}; need {report['min_agreement']:.0%}) "
           f"· model {models} · {report['input_tokens']} input tokens · "
           f"p50 {lat['p50']} ms, p95 {lat['p95']} ms · {report['wall_s']}s wall at concurrency {report['concurrency']}")
@@ -470,7 +476,7 @@ def main() -> int:
         return 2
     except Exception as exc:
         if type(exc).__name__ in _FATAL:
-            print(f"Jev rejected the API key ({type(exc).__name__}). Check it with `autojev.py doctor --verify`.",
+            print(f"The {backend()} backend rejected the API key ({type(exc).__name__}). Check it with `autojev.py doctor --verify`.",
                   file=sys.stderr)
             return 2
         raise

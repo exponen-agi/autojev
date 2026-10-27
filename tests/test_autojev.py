@@ -25,6 +25,7 @@ EXAMPLES = ROOT / "skills" / "autojev" / "examples"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ROOT / "tests"))
 from fake_jev import FakeJev  # noqa: E402
+from fake_openai import FakeOpenAI  # noqa: E402
 import keys  # noqa: E402
 import scaffold  # noqa: E402
 import scan_context as sc  # noqa: E402
@@ -36,6 +37,14 @@ try:
 except ImportError:
     HAVE_SDK = False
 needs_sdk = unittest.skipUnless(HAVE_SDK, "typesafe-sdk not installed: live-path tests need the real SDK")
+
+try:
+    import openai  # noqa: F401
+    import system_one_adapter  # noqa: F401
+    HAVE_ADAPTER = True
+except ImportError:
+    HAVE_ADAPTER = False
+needs_adapter = unittest.skipUnless(HAVE_ADAPTER, "system-one-adapter[openai] not installed: adapter-backend tests need it")
 
 SECRET = "sk-ts-SECRETVALUE1234567890"
 
@@ -637,7 +646,9 @@ class HandlerModeTests(unittest.TestCase):
 
 def clean_env(**extra):
     env = {k: v for k, v in os.environ.items()
-           if k not in ("TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_MODEL", "AUTOJEV_MIN_AGREEMENT")}
+           if k not in ("TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_MODEL", "AUTOJEV_MIN_AGREEMENT",
+                        "AUTOJEV_BACKEND", "AUTOJEV_LLM_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL",
+                        "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")}
     env.update(extra)
     return env
 
@@ -1053,6 +1064,158 @@ class McpKeyTests(unittest.TestCase):
         self.assertIn("VERIFIED", first["content"][0]["text"])
         self.assertTrue(second["isError"])
         self.assertTrue((engine / "verification.json").is_file())
+
+
+class BackendConfigTests(unittest.TestCase):
+    """Backend selection that needs no network and no adapter install."""
+
+    def test_keys_py_and_the_engine_template_agree_on_which_variables_hold_which_key(self):
+        sys.path.insert(0, str(SCRIPTS / "templates"))
+        try:
+            import jev_compat
+        finally:
+            sys.path.remove(str(SCRIPTS / "templates"))
+        self.assertEqual(keys.BACKEND_KEYS, jev_compat.BACKEND_KEYS)
+        self.assertEqual(keys.BASE_URL_ENV, jev_compat.BASE_URL_ENV)
+
+    def test_an_unknown_backend_is_named_not_silently_treated_as_jev(self):
+        code = ("import sys; sys.path.insert(0, %r); import jev_compat as j; "
+                "\ntry:\n j.get_client()\nexcept j.MissingKey as e:\n print(e)" % str(SCRIPTS / "templates"))
+        out = run_py("-c", code, env=clean_env(AUTOJEV_BACKEND="grok", TYPESAFE_API_KEY="sk-ts-x")).stdout
+        self.assertIn("'grok' is not a backend", out)
+        self.assertIn("openai", out)
+
+    def test_an_llm_backend_without_a_model_asks_for_one_and_never_guesses(self):
+        code = ("import sys; sys.path.insert(0, %r); import jev_compat as j; print(j.have_live()); "
+                "\ntry:\n j.get_client()\nexcept j.MissingKey as e:\n print(e)" % str(SCRIPTS / "templates"))
+        out = run_py("-c", code, env=clean_env(AUTOJEV_BACKEND="openai", OPENAI_API_KEY="sk-test")).stdout
+        self.assertTrue(out.startswith("False"), out)
+        self.assertTrue("AUTOJEV_LLM_MODEL" in out or "system-one-adapter is not installed" in out, out)
+
+    def test_the_default_backend_is_still_jev_and_other_providers_keys_do_not_count(self):
+        code = ("import sys; sys.path.insert(0, %r); import jev_compat as j; print(j.backend(), j.have_live())"
+                % str(SCRIPTS / "templates"))
+        out = run_py("-c", code, env=clean_env(OPENAI_API_KEY="sk-test", ANTHROPIC_API_KEY="sk-test")).stdout.split()
+        self.assertEqual(out, ["jev", "False"])
+
+    def test_a_receipt_from_an_llm_backend_is_never_described_as_verified_against_jev(self):
+        report = {"state": "passed", "report": {"endpoint": "default", "backend": "anthropic", "agreed": 7, "samples": 7,
+                                                "agreement": 1.0, "min_agreement": 0.75, "models": ["m"], "verified_at": "t"}}
+        text = scaffold.describe_verification(report)
+        self.assertNotIn("Verified against live Jev", text)
+        self.assertIn("anthropic", text)
+        self.assertIn("not against Jev", text)
+        report["report"].pop("backend")  # receipts written before backends existed were Jev's
+        self.assertIn("Verified against live Jev", scaffold.describe_verification(report))
+
+    def test_doctor_names_the_backend_and_its_variables_without_a_key(self):
+        r = run_py(CLI, "doctor", "--backend", "gemini", "--root", tempfile.mkdtemp())
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("GEMINI_API_KEY or GOOGLE_API_KEY", r.stdout)
+        self.assertIn("setup --backend gemini", r.stdout)
+
+
+@needs_adapter
+class AdapterBackendTests(unittest.TestCase):
+    """The system-one-adapter backend, run with the REAL adapter and the REAL openai SDK against a stand-in
+    OpenAI-compatible server. Proves plumbing: selection, auth, parallelism, receipts. Not any model's judgment."""
+
+    KEY = "sk-test-openai"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.root = cls.tmp / "project"
+        cls.engine = cls.root / "decision_engines" / "support-ticket-triage"
+        r = py(SCRIPTS / "scaffold.py", "build", EXAMPLES / "support-ticket-triage.spec.json", "--out", cls.engine)
+        assert r.returncode == 0, r.stdout
+
+    def env(self, fake, key=None, **extra):
+        return clean_env(AUTOJEV_BACKEND="openai", AUTOJEV_LLM_MODEL="stand-in-model", OPENAI_API_KEY=key or self.KEY,
+                         OPENAI_BASE_URL=fake.url, **extra)
+
+    def tearDown(self):
+        (self.engine / "verification.json").unlink(missing_ok=True)
+        (self.root / ".env").unlink(missing_ok=True)
+
+    def test_verify_runs_through_the_adapter_and_the_receipt_says_it_was_not_jev(self):
+        with FakeOpenAI(valid_key=self.KEY, answers=fixture_answers(self.engine)) as fake:
+            r = run_py(self.engine / "engine.py", "--verify", env=self.env(fake), cwd=self.engine)
+            url = fake.url.rsplit("/v1", 1)[0]
+            self.assertGreaterEqual(fake.calls, 7)
+            self.assertEqual(set(fake.auth_headers), {f"Bearer {self.KEY}"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("7/7 agree", r.stdout)
+        self.assertIn("NOT by Jev", r.stdout)
+        self.assertIn("openai (not Jev) gave", r.stdout)
+        report = json.loads((self.engine / "verification.json").read_text())
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["backend"], "openai")
+        self.assertEqual(report["models"], ["stand-in-model"])
+        self.assertEqual(report["endpoint"], url)
+        self.assertNotIn(self.KEY, (self.engine / "verification.json").read_text() + r.stdout + r.stderr)
+        again = py(SCRIPTS / "scaffold.py", "build", self.engine / "spec.json", "--out", self.engine)
+        self.assertNotIn("Verified against live Jev", again.stdout)
+        self.assertIn("not against Jev", again.stdout.replace("**", ""))
+
+    def test_decisions_work_through_the_adapter_not_just_verification(self):
+        with FakeOpenAI(valid_key=self.KEY, answers=fixture_answers(self.engine)) as fake:
+            sample = json.loads((self.engine / "samples.json").read_text())[0]
+            state = self.tmp / "state.json"
+            state.write_text(json.dumps(sample["state"]))
+            r = run_py(self.engine / "engine.py", "--state", state, env=self.env(fake), cwd=self.engine)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["outcome"], sample["expect"])
+        self.assertEqual(result["model"], "stand-in-model")
+        self.assertEqual(result["usage"], {"input_tokens": 120, "output_tokens": 30})
+
+    def test_a_rejected_key_stops_the_run_and_is_named(self):
+        with FakeOpenAI(valid_key=self.KEY, answers=fixture_answers(self.engine)) as fake:
+            r = run_py(self.engine / "engine.py", "--verify", env=self.env(fake, key="sk-test-wrong"), cwd=self.engine)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("openai backend rejected the API key", r.stderr)
+        self.assertNotIn("sk-test-wrong", r.stdout + r.stderr)
+
+    def test_no_model_means_no_request(self):
+        with FakeOpenAI(valid_key=self.KEY) as fake:
+            env = self.env(fake)
+            env.pop("AUTOJEV_LLM_MODEL")
+            r = run_py(self.engine / "engine.py", "--verify", env=env, cwd=self.engine)
+            self.assertEqual(fake.calls, 0)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("AUTOJEV_LLM_MODEL", r.stderr)
+
+    def test_backend_and_key_can_live_in_the_project_dotenv(self):
+        with FakeOpenAI(valid_key=self.KEY, answers=fixture_answers(self.engine)) as fake:
+            (self.root / ".env").write_text(f"AUTOJEV_BACKEND=openai\nAUTOJEV_LLM_MODEL=stand-in-model\n"
+                                            f"OPENAI_API_KEY={self.KEY}\nOPENAI_BASE_URL={fake.url}\n")
+            r = run_py(self.engine / "engine.py", "--verify", "--no-write", env=clean_env(), cwd=self.engine)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_doctor_verifies_an_llm_key_and_tells_accepted_from_rejected(self):
+        with FakeOpenAI(valid_key=self.KEY) as fake:
+            ok = run_py(CLI, "doctor", "--backend", "openai", "--verify", "--root", self.root, env=self.env(fake))
+            bad = run_py(CLI, "doctor", "--backend", "openai", "--verify", "--root", self.root,
+                         env=self.env(fake, key="sk-test-wrong"))
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        self.assertIn("Live check: OK", ok.stdout)
+        self.assertIn("not Jev", ok.stdout)
+        self.assertIn("Endpoint: CUSTOM", ok.stdout)
+        self.assertEqual(bad.returncode, 2, bad.stdout)
+        self.assertIn("rejected", bad.stdout)
+        self.assertNotIn(self.KEY, ok.stdout + ok.stderr + bad.stdout + bad.stderr)
+
+    def test_setup_saves_the_provider_key_and_backend_privately_and_verifies_it(self):
+        with FakeOpenAI(valid_key=self.KEY) as fake:
+            r = run_py(CLI, "setup", "--backend", "openai", "--stdin", "--root", self.root, stdin=self.KEY + "\n",
+                       env=clean_env(AUTOJEV_LLM_MODEL="stand-in-model", OPENAI_BASE_URL=fake.url))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Live check: OK", r.stdout)
+        env_file = self.root / ".env"
+        self.assertEqual(env_file.read_text().splitlines(), [f"OPENAI_API_KEY={self.KEY}", "AUTOJEV_BACKEND=openai"])
+        self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(self.KEY, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

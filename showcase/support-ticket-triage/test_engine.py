@@ -60,10 +60,11 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("error", results[1])
 
 
-@unittest.skipUnless(engine.have_live(), "live verification not run: no TYPESAFE_API_KEY (or typesafe-sdk "
-                     "not installed). Offline tests above passed; nothing was verified against Jev itself.")
+@unittest.skipUnless(engine.have_live(), "live verification not run: no API key for the configured backend (or its "
+                     "client library is not installed). Offline tests above passed; nothing was verified against Jev itself.")
 class LiveTests(unittest.TestCase):
-    """Run only when a key is available: the same samples, answered by the real Jev, in parallel.
+    """Run only when a key is available: the same samples, answered by the configured backend (Jev unless
+    AUTOJEV_BACKEND says otherwise), in parallel.
 
     Set AUTOJEV_MIN_AGREEMENT to change how many must reach their expected outcome (default 0.75).
     """

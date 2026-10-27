@@ -163,6 +163,8 @@ def t_stop(args):
 
 def t_doctor(args):
     argv = ["doctor", "--root", str(_root(args))] + (["--verify"] if args.get("verify") else [])
+    if args.get("backend"):
+        argv += ["--backend", str(args["backend"])]
     code, text = _captured(keys.main, argv)
     return f"exit {code}\n{text}"
 
@@ -198,11 +200,14 @@ TOOLS = {
         {"spec": SPEC_PROP, "root": ROOT_PROP}),
     "autojev_check_engine": (t_check, "Re-run the checks and tests on an existing engine.",
         {"slug": SLUG_PROP, "root": ROOT_PROP}),
-    "autojev_doctor": (t_doctor, "Is a Jev API key available (environment or the project's .env), and with verify=true "
-        "does Jev accept it? Reports status and source only: never the key. If it is missing, ask the user to run "
-        "`autojev.py setup` themselves; never ask them to paste the key into this conversation.",
-        {"root": ROOT_PROP, "verify": {"type": "boolean"}}),
-    "autojev_verify_engine": (t_verify, "Run an engine's samples through LIVE Jev in parallel and write verification.json. "
+    "autojev_doctor": (t_doctor, "Is an API key available (environment or the project's .env), and with verify=true "
+        "does the backend accept it? Backend is Jev unless AUTOJEV_BACKEND (or `backend`) selects an LLM "
+        "(openai, anthropic, gemini) through system-one-adapter, whose answers are not Jev's. Reports status and "
+        "source only: never the key. If it is missing, ask the user to run `autojev.py setup` (with "
+        "`--backend NAME` for an LLM) themselves; never ask them to paste the key into this conversation.",
+        {"root": ROOT_PROP, "verify": {"type": "boolean"},
+         "backend": {"type": "string", "enum": ["jev", "openai", "anthropic", "gemini"]}}),
+    "autojev_verify_engine": (t_verify, "Run an engine's samples through the LIVE backend (Jev by default) in parallel and write verification.json. "
         "Needs a key. Makes real API calls (a few tokens each). Disagreements are information: never edit an expectation just to pass.",
         {"slug": SLUG_PROP, "root": ROOT_PROP, "min_agreement": {"type": "number"}}),
     "autojev_snapshot": (t_snapshot, "Save the context baseline the watcher compares against.", {"root": ROOT_PROP}),
