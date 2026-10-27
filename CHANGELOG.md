@@ -7,6 +7,13 @@ All notable changes are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Pluggable backend via [`system-one-adapter`](https://github.com/typesafe-ai/system-one-adapter-python).**
+  Engines are no longer tied to Jev: `AUTOJEV_BACKEND=openai|anthropic|gemini` (with `AUTOJEV_LLM_MODEL` and
+  the provider's key) sends the same questions through the adapter, which answers with an LLM. Jev stays
+  the default and nothing changes unless you opt in. `doctor` and `setup` take `--backend`; the MCP
+  `autojev_doctor` tool takes `backend`. Receipts record `backend`, and anything not answered by Jev is
+  described as such, never as verified against Jev. Tested with the real adapter and `openai` SDK against
+  a stand-in server (`tests/fake_openai.py`).
 - **API key handling.** `autojev.py doctor` reports whether a Jev key is available (environment or `.env`)
   and, with `--verify`, whether Jev accepts it, without ever printing it. `autojev.py setup` saves it
   privately (hidden prompt or stdin, never an argument; `.env` mode 600; added to `.gitignore`). The skill

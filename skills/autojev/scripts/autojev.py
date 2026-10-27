@@ -7,8 +7,10 @@
     autojev.py build SPEC --out DIR       validate a spec, render the engine, self-check, run tests
     autojev.py validate SPEC              static checks only
     autojev.py check DIR                  re-run the checks on an existing engine
-    autojev.py doctor [--verify]          is a Jev API key available, and does Jev accept it? (never prints it)
+    autojev.py doctor [--verify]          is an API key available, and is it accepted? (never prints it)
     autojev.py setup [--stdin]            save the key to .env privately (hidden prompt; mode 600; git-ignored)
+                                          both take --backend jev|openai|anthropic|gemini (default jev; the
+                                          others answer through system-one-adapter, not Jev)
     autojev.py watch run|status|ack ...   the background watcher (see watch.py --help)
     autojev.py stop [--dry-run]           stop the watcher, delete .autojev/, keep the engines
     autojev.py playbook                   the full workflow an agent follows (same as SKILL.md)

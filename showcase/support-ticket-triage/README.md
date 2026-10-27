@@ -15,7 +15,7 @@ python calibrate.py labelled.jsonl --question <name>   # earn your thresholds
 
 ## Verification
 
-**Not verified against live Jev.** The rules are tested offline only, with assumed answers. Run `python engine.py --verify` with a `TYPESAFE_API_KEY`.
+**Not verified against live Jev.** The rules are tested offline only, with assumed answers. Run `python engine.py --verify` with a `TYPESAFE_API_KEY` (or set `AUTOJEV_BACKEND` to check the rules against an LLM instead, which is not verification against Jev).
 
 Offline tests prove the rules route correctly *given* assumed answers. `--verify` runs the same samples through the real Jev, so it shows whether Jev's answers lead those rules to the same outcomes. It needs a `TYPESAFE_API_KEY` (environment, or a git-ignored `.env`). A disagreement is information, not automatically a bug: never edit an expectation just to make it pass.
 

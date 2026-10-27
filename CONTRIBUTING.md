@@ -10,6 +10,7 @@ git clone https://github.com/exponen-agi/autojev.git
 cd autojev
 python -m unittest discover -s tests -v     # ~1 min; Python 3.10+, no installs
 pip install typesafe-sdk                     # optional: also runs the live-path tests (see below)
+pip install 'system-one-adapter[openai]'     # optional: also runs the adapter-backend tests
 claude plugin validate .                    # only if you use Claude Code
 ```
 
@@ -18,7 +19,8 @@ There is nothing to install. If a change needs a dependency, that is a design di
 The live code paths (auth, parallelism, pacing, retries, verification receipts) are tested with the
 **real `typesafe-sdk`** against a local stand-in server, `tests/fake_jev.py`. Without the SDK those
 tests skip and CI runs both ways. The stand-in proves plumbing, never Jev's judgment; do not write a
-test that treats its answers as one.
+test that treats its answers as one. The `system-one-adapter` backend is tested the same way with the real
+adapter and `openai` SDK against `tests/fake_openai.py`.
 
 ## What kinds of contribution help most
 

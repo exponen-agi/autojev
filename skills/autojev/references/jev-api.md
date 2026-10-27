@@ -17,6 +17,11 @@ response.model                    # the versioned id that actually answered — 
 `state` is text, a JSON object, or an array. Questions are independent and answered in
 parallel against the same state, in a single round trip. REST: `POST /v1/systemone`.
 
+The same call shape also runs against an LLM when `AUTOJEV_BACKEND` is `openai`, `anthropic` or `gemini`
+(through [`system-one-adapter`](https://github.com/typesafe-ai/system-one-adapter-python), which returns the same
+answer types). Generated code must not rely on anything beyond this API either way, and must not assume an
+LLM's confidence means what Jev's does.
+
 ## The three primitives
 
 | Primitive | Declare | Answer fields |

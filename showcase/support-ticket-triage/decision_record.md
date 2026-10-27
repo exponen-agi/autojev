@@ -6,7 +6,7 @@ Decide, for every inbound support message, whether to drop it, fast-track a poli
 
 ## Verification
 
-**Not verified against live Jev.** The rules are tested offline only, with assumed answers. Run `python engine.py --verify` with a `TYPESAFE_API_KEY`.
+**Not verified against live Jev.** The rules are tested offline only, with assumed answers. Run `python engine.py --verify` with a `TYPESAFE_API_KEY` (or set `AUTOJEV_BACKEND` to check the rules against an LLM instead, which is not verification against Jev).
 
 ## Designs considered
 
